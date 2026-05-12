@@ -1,0 +1,525 @@
+import { serve } from '@hono/node-server';
+import { Hono } from 'hono';
+import mysql, {} from 'mysql2/promise';
+const app = new Hono();
+const handleError = (c, error) => {
+    console.error(error);
+    const message = error instanceof Error ? error.message : 'Terjadi kesalahan pada database';
+    return c.json({ success: false, error: message }, 500);
+};
+// ==========================================
+// 2. SETUP SERVER & DATABASE
+// ==========================================
+const pool = mysql.createPool({
+    host: 'sezv39.h.filess.io',
+    user: 'Universitas_Cendekia_dependago',
+    port: 3305,
+    password: '66f4683a255031db382834e4e7f30a9b0cd572f2', // Sesuaikan password MySQL kamu
+    database: 'Universitas_Cendekia_dependago',
+    waitForConnections: true,
+    connectionLimit: 5,
+});
+app.get('/api/departemen', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM departemen');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/departemen/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM departemen WHERE id_departemen=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/departemen', async (c) => {
+    try {
+        const { id_departemen, nama_departemen, kepala_departemen } = await c.req.json();
+        const [res] = await pool.query('INSERT INTO departemen VALUES (?, ?, ?)', [id_departemen, nama_departemen, kepala_departemen]);
+        return c.json({ success: true, id: id_departemen || res.insertId }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/departemen/:id', async (c) => {
+    try {
+        const { nama_departemen, kepala_departemen } = await c.req.json();
+        await pool.query('UPDATE departemen SET nama_departemen=?, kepala_departemen=? WHERE id_departemen=?', [nama_departemen, kepala_departemen, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/departemen/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM departemen WHERE id_departemen=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// MAHASISWA
+// ------------------------------------------
+app.get('/api/mahasiswa', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM mahasiswa');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/mahasiswa/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM mahasiswa WHERE NRP=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/mahasiswa', async (c) => {
+    try {
+        const { NRP, nama_mahasiswa, angkatan, semester, status_aktif, id_departemen } = await c.req.json();
+        await pool.query('INSERT INTO mahasiswa VALUES (?, ?, ?, ?, ?, ?)', [NRP, nama_mahasiswa, angkatan, semester, status_aktif, id_departemen]);
+        return c.json({ success: true, id: NRP }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/mahasiswa/:id', async (c) => {
+    try {
+        const { nama_mahasiswa, angkatan, semester, status_aktif, id_departemen } = await c.req.json();
+        await pool.query('UPDATE mahasiswa SET nama_mahasiswa=?, angkatan=?, semester=?, status_aktif=?, id_departemen=? WHERE NRP=?', [nama_mahasiswa, angkatan, semester, status_aktif, id_departemen, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/mahasiswa/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM mahasiswa WHERE NRP=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// DOSEN
+// ------------------------------------------
+app.get('/api/dosen', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM dosen');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/dosen/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM dosen WHERE id_dosen=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/dosen', async (c) => {
+    try {
+        const { nama_dosen, jabatan_akademik, id_departemen } = await c.req.json();
+        const [res] = await pool.query('INSERT INTO dosen (nama_dosen, jabatan_akademik, id_departemen) VALUES (?, ?, ?)', [nama_dosen, jabatan_akademik, id_departemen]);
+        return c.json({ success: true, id: res.insertId }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/dosen/:id', async (c) => {
+    try {
+        const { nama_dosen, jabatan_akademik, id_departemen } = await c.req.json();
+        await pool.query('UPDATE dosen SET nama_dosen=?, jabatan_akademik=?, id_departemen=? WHERE id_dosen=?', [nama_dosen, jabatan_akademik, id_departemen, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/dosen/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM dosen WHERE id_dosen=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// MATA KULIAH
+// ------------------------------------------
+app.get('/api/matakuliah', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM mata_kuliah');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/matakuliah/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM mata_kuliah WHERE id_matkul=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/matakuliah', async (c) => {
+    try {
+        const { id_matkul, nama_matkul, sks } = await c.req.json();
+        await pool.query('INSERT INTO mata_kuliah VALUES (?, ?, ?)', [id_matkul, nama_matkul, sks]);
+        return c.json({ success: true, id: id_matkul }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/matakuliah/:id', async (c) => {
+    try {
+        const { nama_matkul, sks } = await c.req.json();
+        await pool.query('UPDATE mata_kuliah SET nama_matkul=?, sks=? WHERE id_matkul=?', [nama_matkul, sks, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/matakuliah/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM mata_kuliah WHERE id_matkul=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// KELAS
+// ------------------------------------------
+app.get('/api/kelas', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM kelas');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/kelas/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM kelas WHERE id_kelas=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/kelas', async (c) => {
+    try {
+        const { ruangan, nama_kelas, kapasitas_kelas } = await c.req.json();
+        const [res] = await pool.query('INSERT INTO kelas (ruangan, nama_kelas, kapasitas_kelas) VALUES (?, ?, ?)', [ruangan, nama_kelas, kapasitas_kelas]);
+        return c.json({ success: true, id: res.insertId }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/kelas/:id', async (c) => {
+    try {
+        const { ruangan, nama_kelas, kapasitas_kelas } = await c.req.json();
+        await pool.query('UPDATE kelas SET ruangan=?, nama_kelas=?, kapasitas_kelas=? WHERE id_kelas=?', [ruangan, nama_kelas, kapasitas_kelas, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/kelas/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM kelas WHERE id_kelas=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// JADWAL
+// ------------------------------------------
+app.get('/api/jadwal', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM jadwal');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/jadwal/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM jadwal WHERE id_jadwal=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/jadwal', async (c) => {
+    try {
+        const { hari, jam_mulai, jam_selesai, semester, id_matkul, id_kelas, id_dosen } = await c.req.json();
+        const [res] = await pool.query('INSERT INTO jadwal (hari, jam_mulai, jam_selesai, semester, id_matkul, id_kelas, id_dosen) VALUES (?, ?, ?, ?, ?, ?, ?)', [hari, jam_mulai, jam_selesai, semester, id_matkul, id_kelas, id_dosen]);
+        return c.json({ success: true, id: res.insertId }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/jadwal/:id', async (c) => {
+    try {
+        const { hari, jam_mulai, jam_selesai, semester, id_matkul, id_kelas, id_dosen } = await c.req.json();
+        await pool.query('UPDATE jadwal SET hari=?, jam_mulai=?, jam_selesai=?, semester=?, id_matkul=?, id_kelas=?, id_dosen=? WHERE id_jadwal=?', [hari, jam_mulai, jam_selesai, semester, id_matkul, id_kelas, id_dosen, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/jadwal/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM jadwal WHERE id_jadwal=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// KRS
+// ------------------------------------------
+app.get('/api/krs', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM krs');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/krs/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM krs WHERE id_krs=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/krs', async (c) => {
+    try {
+        const { NRP, total_sks, status_krs, semester, tahun_ajaran } = await c.req.json();
+        const [res] = await pool.query('INSERT INTO krs (NRP, total_sks, status_krs, semester, tahun_ajaran) VALUES (?, ?, ?, ?, ?)', [NRP, total_sks, status_krs, semester, tahun_ajaran]);
+        return c.json({ success: true, id: res.insertId }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/krs/:id', async (c) => {
+    try {
+        const { NRP, total_sks, status_krs, semester, tahun_ajaran } = await c.req.json();
+        await pool.query('UPDATE krs SET NRP=?, total_sks=?, status_krs=?, semester=?, tahun_ajaran=? WHERE id_krs=?', [NRP, total_sks, status_krs, semester, tahun_ajaran, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/krs/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM krs WHERE id_krs=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// DETAIL KRS
+// ------------------------------------------
+app.get('/api/detailkrs', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM detail_krs');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/detailkrs/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM detail_krs WHERE id_dkrs=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/detailkrs', async (c) => {
+    try {
+        const { status_matkul, id_krs, id_jadwal } = await c.req.json();
+        const [res] = await pool.query('INSERT INTO detail_krs (status_matkul, id_krs, id_jadwal) VALUES (?, ?, ?)', [status_matkul, id_krs, id_jadwal]);
+        return c.json({ success: true, id: res.insertId }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/detailkrs/:id', async (c) => {
+    try {
+        const { status_matkul, id_krs, id_jadwal } = await c.req.json();
+        await pool.query('UPDATE detail_krs SET status_matkul=?, id_krs=?, id_jadwal=? WHERE id_dkrs=?', [status_matkul, id_krs, id_jadwal, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/detailkrs/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM detail_krs WHERE id_dkrs=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// NILAI
+// ------------------------------------------
+app.get('/api/nilai', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM nilai');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/nilai/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM nilai WHERE id_nilai=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/nilai', async (c) => {
+    try {
+        const { nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs } = await c.req.json();
+        const [res] = await pool.query('INSERT INTO nilai (nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs) VALUES (?, ?, ?, ?, ?, ?)', [nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs]);
+        return c.json({ success: true, id: res.insertId }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/nilai/:id', async (c) => {
+    try {
+        const { nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs } = await c.req.json();
+        await pool.query('UPDATE nilai SET nilai_tugas=?, nilai_ETS=?, nilai_EAS=?, nilai_akhir=?, huruf_mutu=?, id_dkrs=? WHERE id_nilai=?', [nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/nilai/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM nilai WHERE id_nilai=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// ------------------------------------------
+// USERS
+// ------------------------------------------
+app.get('/api/users', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT id_user, email, role, created_at, updated_at, NRP, id_dosen FROM users');
+        return c.json(rows);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.get('/api/users/:id', async (c) => {
+    try {
+        const [rows] = await pool.query('SELECT id_user, email, role, created_at, updated_at, NRP, id_dosen FROM users WHERE id_user=?', [c.req.param('id')]);
+        return c.json(rows[0] || null);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.post('/api/users', async (c) => {
+    try {
+        const { email, password, role, NRP, id_dosen } = await c.req.json();
+        const [res] = await pool.query('INSERT INTO users (email, password, role, NRP, id_dosen) VALUES (?, ?, ?, ?, ?)', [email, password, role, NRP || null, id_dosen || null]);
+        return c.json({ success: true, id: res.insertId }, 201);
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.put('/api/users/:id', async (c) => {
+    try {
+        const { email, role, NRP, id_dosen } = await c.req.json();
+        await pool.query('UPDATE users SET email=?, role=?, NRP=?, id_dosen=? WHERE id_user=?', [email, role, NRP || null, id_dosen || null, c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+app.delete('/api/users/:id', async (c) => {
+    try {
+        await pool.query('DELETE FROM users WHERE id_user=?', [c.req.param('id')]);
+        return c.json({ success: true });
+    }
+    catch (e) {
+        return handleError(c, e);
+    }
+});
+// --- SERVER START ---
+const port = 5000;
+console.log(`Server Cendekia berjalan di http://localhost:${port}`);
+serve({
+    fetch: app.fetch,
+    port
+});
