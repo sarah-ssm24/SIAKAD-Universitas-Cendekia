@@ -1,8 +1,61 @@
 import { serve } from '@hono/node-server'
 import { Hono, type Context } from 'hono'
 import mysql, { type RowDataPacket, type ResultSetHeader } from 'mysql2/promise';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const app = new Hono()
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const loadEnvFile = () => {
+  const envPath = resolve(__dirname, '..', '.env');
+
+  if (!existsSync(envPath)) {
+    return;
+  }
+
+  const envFile = readFileSync(envPath, 'utf8');
+
+  for (const line of envFile.split(/\r?\n/)) {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf('=');
+
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    let value = trimmed.slice(separatorIndex + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] ??= value;
+  }
+};
+
+const getEnv = (key: string, fallback?: string) => {
+  const value = process.env[key] ?? fallback;
+
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+
+  return value;
+};
+
+loadEnvFile();
 
 // ==========================================
 // 1. DEFINISI TIPE & INTERFACE (Sesuai ERD Baru)
@@ -42,7 +95,7 @@ interface Users extends RowDataPacket {
 }
 
 interface MataKuliah extends RowDataPacket {
-  id_matkul: string;
+  id_matkul: number;
   nama_matkul: string;
   sks: number;
 }
@@ -60,7 +113,7 @@ interface Jadwal extends RowDataPacket {
   jam_mulai: string;
   jam_selesai: string;
   semester: string;
-  id_matkul: string;
+  id_matkul: number;
   id_kelas: number;
   id_dosen: number;
 }
@@ -94,8 +147,21 @@ interface Nilai extends RowDataPacket {
 
 const handleError = (c: Context, error: unknown) => {
   console.error(error);
+  const databaseError = error as Error & { code?: string; sqlState?: string };
   const message = error instanceof Error ? error.message : 'Terjadi kesalahan pada database';
-  return c.json({ success: false, error: message }, 500);
+  const clientErrorCodes = new Set([
+    'ER_BAD_NULL_ERROR',
+    'ER_DUP_ENTRY',
+    'ER_NO_REFERENCED_ROW_2',
+    'ER_ROW_IS_REFERENCED_2',
+    'ER_TRUNCATED_WRONG_VALUE',
+    'ER_WARN_DATA_OUT_OF_RANGE',
+  ]);
+  const status = databaseError.sqlState === '45000' || clientErrorCodes.has(databaseError.code ?? '')
+    ? 400
+    : 500;
+
+  return c.json({ success: false, error: message }, status);
 };
 
 // ==========================================
@@ -103,13 +169,13 @@ const handleError = (c: Context, error: unknown) => {
 // ==========================================
 
 const pool = mysql.createPool({
-  host: 'sezv39.h.filess.io',
-  user: 'Universitas_Cendekia_dependago',
-  port: 3305,
-  password: '66f4683a255031db382834e4e7f30a9b0cd572f2', // Sesuaikan password MySQL kamu
-  database: 'Universitas_Cendekia_dependago',
+  host: getEnv('DB_HOST'),
+  user: getEnv('DB_USER'),
+  port: Number(getEnv('DB_PORT', '3306')),
+  password: getEnv('DB_PASSWORD'),
+  database: getEnv('DB_NAME'),
   waitForConnections: true,
-  connectionLimit: 5,
+  connectionLimit: Number(getEnv('DB_CONNECTION_LIMIT', '5')),
 });
 
 app.get('/api/departemen', async (c) => {
@@ -132,12 +198,12 @@ app.get('/api/departemen/:id', async (c) => {
 
 app.post('/api/departemen', async (c) => {
   try {
-    const { id_departemen, nama_departemen, kepala_departemen } = await c.req.json();
+    const { nama_departemen, kepala_departemen } = await c.req.json();
     const [res] = await pool.query<ResultSetHeader>(
-      'INSERT INTO departemen VALUES (?, ?, ?)',
-      [id_departemen, nama_departemen, kepala_departemen]
+      'INSERT INTO departemen (nama_departemen, kepala_departemen) VALUES (?, ?)',
+      [nama_departemen, kepala_departemen]
     );
-    return c.json({ success: true, id: id_departemen || res.insertId }, 201);
+    return c.json({ success: true, id: res.insertId }, 201);
   } catch (e) {
     return handleError(c, e);
   }
@@ -300,12 +366,12 @@ app.get('/api/matakuliah/:id', async (c) => {
 
 app.post('/api/matakuliah', async (c) => {
   try {
-    const { id_matkul, nama_matkul, sks } = await c.req.json();
-    await pool.query(
-      'INSERT INTO mata_kuliah VALUES (?, ?, ?)',
-      [id_matkul, nama_matkul, sks]
+    const { nama_matkul, sks } = await c.req.json();
+    const [res] = await pool.query<ResultSetHeader>(
+      'INSERT INTO mata_kuliah (nama_matkul, sks) VALUES (?, ?)',
+      [nama_matkul, sks]
     );
-    return c.json({ success: true, id: id_matkul }, 201);
+    return c.json({ success: true, id: res.insertId }, 201);
   } catch (e) {
     return handleError(c, e);
   }
@@ -468,10 +534,10 @@ app.get('/api/krs/:id', async (c) => {
 
 app.post('/api/krs', async (c) => {
   try {
-    const { NRP, total_sks, status_krs, semester, tahun_ajaran } = await c.req.json();
+    const { NRP, status_krs, semester, tahun_ajaran } = await c.req.json();
     const [res] = await pool.query<ResultSetHeader>(
       'INSERT INTO krs (NRP, total_sks, status_krs, semester, tahun_ajaran) VALUES (?, ?, ?, ?, ?)',
-      [NRP, total_sks, status_krs, semester, tahun_ajaran]
+      [NRP, 0, status_krs, semester, tahun_ajaran]
     );
     return c.json({ success: true, id: res.insertId }, 201);
   } catch (e) {
@@ -481,10 +547,10 @@ app.post('/api/krs', async (c) => {
 
 app.put('/api/krs/:id', async (c) => {
   try {
-    const { NRP, total_sks, status_krs, semester, tahun_ajaran } = await c.req.json();
+    const { NRP, status_krs, semester, tahun_ajaran } = await c.req.json();
     await pool.query(
-      'UPDATE krs SET NRP=?, total_sks=?, status_krs=?, semester=?, tahun_ajaran=? WHERE id_krs=?',
-      [NRP, total_sks, status_krs, semester, tahun_ajaran, c.req.param('id')]
+      'UPDATE krs SET NRP=?, status_krs=?, semester=?, tahun_ajaran=? WHERE id_krs=?',
+      [NRP, status_krs, semester, tahun_ajaran, c.req.param('id')]
     );
     return c.json({ success: true });
   } catch (e) {
@@ -524,7 +590,7 @@ app.get('/api/detailkrs/:id', async (c) => {
 
 app.post('/api/detailkrs', async (c) => {
   try {
-    const { status_matkul, id_krs, id_jadwal } = await c.req.json();
+    const { status_matkul = 'Aktif', id_krs, id_jadwal } = await c.req.json();
     const [res] = await pool.query<ResultSetHeader>(
       'INSERT INTO detail_krs (status_matkul, id_krs, id_jadwal) VALUES (?, ?, ?)',
       [status_matkul, id_krs, id_jadwal]
@@ -537,10 +603,10 @@ app.post('/api/detailkrs', async (c) => {
 
 app.put('/api/detailkrs/:id', async (c) => {
   try {
-    const { status_matkul, id_krs, id_jadwal } = await c.req.json();
+    const { status_matkul } = await c.req.json();
     await pool.query(
-      'UPDATE detail_krs SET status_matkul=?, id_krs=?, id_jadwal=? WHERE id_dkrs=?',
-      [status_matkul, id_krs, id_jadwal, c.req.param('id')]
+      'UPDATE detail_krs SET status_matkul=? WHERE id_dkrs=?',
+      [status_matkul, c.req.param('id')]
     );
     return c.json({ success: true });
   } catch (e) {
@@ -580,10 +646,10 @@ app.get('/api/nilai/:id', async (c) => {
 
 app.post('/api/nilai', async (c) => {
   try {
-    const { nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs } = await c.req.json();
+    const { nilai_tugas, nilai_ETS, nilai_EAS, id_dkrs } = await c.req.json();
     const [res] = await pool.query<ResultSetHeader>(
-      'INSERT INTO nilai (nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs) VALUES (?, ?, ?, ?, ?, ?)',
-      [nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs]
+      'INSERT INTO nilai (nilai_tugas, nilai_ETS, nilai_EAS, id_dkrs) VALUES (?, ?, ?, ?)',
+      [nilai_tugas, nilai_ETS, nilai_EAS, id_dkrs]
     );
     return c.json({ success: true, id: res.insertId }, 201);
   } catch (e) {
@@ -593,10 +659,10 @@ app.post('/api/nilai', async (c) => {
 
 app.put('/api/nilai/:id', async (c) => {
   try {
-    const { nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs } = await c.req.json();
+    const { nilai_tugas, nilai_ETS, nilai_EAS } = await c.req.json();
     await pool.query(
-      'UPDATE nilai SET nilai_tugas=?, nilai_ETS=?, nilai_EAS=?, nilai_akhir=?, huruf_mutu=?, id_dkrs=? WHERE id_nilai=?',
-      [nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs, c.req.param('id')]
+      'UPDATE nilai SET nilai_tugas=?, nilai_ETS=?, nilai_EAS=? WHERE id_nilai=?',
+      [nilai_tugas, nilai_ETS, nilai_EAS, c.req.param('id')]
     );
     return c.json({ success: true });
   } catch (e) {
