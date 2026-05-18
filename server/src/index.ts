@@ -80,6 +80,7 @@ interface PeriodeAktif extends RowDataPacket {
   id_periode: number;
   tahun: number;
   semester: string;
+  is_aktif: number;
   updated_at: string;
 }
 
@@ -120,6 +121,7 @@ interface Jadwal extends RowDataPacket {
   jam_mulai: string;
   jam_selesai: string;
   semester: string;
+  id_periode: number;
   id_matkul: number;
   id_kelas: number;
   id_dosen: number;
@@ -132,6 +134,7 @@ interface Krs extends RowDataPacket {
   status_krs: string;
   semester: string;
   tahun_ajaran: string;
+  id_periode: number;
   tanggal_pengajuan: string;
   tanggal_diproses: string | null;
 }
@@ -206,27 +209,45 @@ const calculateSemesterKe = (angkatan: number, tahun: number, semester: string) 
   return Math.max(1, semesterKe);
 };
 
-const getLatestPeriodeAktif = async (conn?: PoolConnection) => {
+const getActivePeriode = async (conn?: PoolConnection) => {
   const executor = conn ?? pool;
   const [rows] = await executor.query<PeriodeAktif[]>(
-    'SELECT id_periode, tahun, semester, updated_at FROM periode_aktif ORDER BY id_periode DESC LIMIT 1'
+    `SELECT id_periode, tahun, semester, is_aktif, updated_at
+     FROM periode_aktif
+     WHERE is_aktif = 1
+     ORDER BY id_periode DESC
+     LIMIT 1`
   );
 
   return rows[0] ?? null;
 };
 
 const getRequiredPeriodeAktif = async (conn?: PoolConnection) => {
-  const periode = await getLatestPeriodeAktif(conn);
+  const periode = await getActivePeriode(conn);
 
   if (!periode) {
-    throw createClientError('Periode aktif belum diatur');
+    throw createClientError('Periode aktif belum dipilih. Set salah satu periode dengan is_aktif = 1.');
+  }
+
+  return periode;
+};
+
+const getRequiredPeriodeById = async (conn: PoolConnection, idPeriode: number) => {
+  const [rows] = await conn.query<PeriodeAktif[]>(
+    'SELECT id_periode, tahun, semester, is_aktif, updated_at FROM periode_aktif WHERE id_periode=?',
+    [idPeriode]
+  );
+  const periode = rows[0];
+
+  if (!periode) {
+    throw createClientError('Periode akademik tidak ditemukan');
   }
 
   return periode;
 };
 
 const getSemesterKeForAngkatan = async (angkatan: number) => {
-  const periode = await getLatestPeriodeAktif();
+  const periode = await getActivePeriode();
 
   if (!periode) {
     return 1;
@@ -247,6 +268,18 @@ const validatePeriodeInput = (tahun: unknown, semester: unknown) => {
   }
 
   return { tahun: parsedTahun, semester };
+};
+
+const parseIsAktif = (value: unknown, fallback = false) => {
+  if (value === undefined || value === null || value === '') {
+    return fallback ? 1 : 0;
+  }
+
+  if (value === true || value === 1 || value === '1' || value === 'true') {
+    return 1;
+  }
+
+  return 0;
 };
 
 const normalizeUserRoleLinks = (roleInput: unknown, nrpInput: unknown, idDosenInput: unknown) => {
@@ -335,8 +368,14 @@ const updateMahasiswaStatusFromKrs = async (
   }
 };
 
-const savePeriodeAktif = async (tahunInput: unknown, semesterInput: unknown, id?: string) => {
+const savePeriodeAktif = async (
+  tahunInput: unknown,
+  semesterInput: unknown,
+  isAktifInput: unknown,
+  id?: string
+) => {
   const { tahun, semester } = validatePeriodeInput(tahunInput, semesterInput);
+  let isAktif = parseIsAktif(isAktifInput, !id);
   const conn = await pool.getConnection();
 
   try {
@@ -344,42 +383,49 @@ const savePeriodeAktif = async (tahunInput: unknown, semesterInput: unknown, id?
 
     let periodeId = id ? Number(id) : null;
 
+    const [activeRows] = await conn.query<PeriodeAktif[]>(
+      'SELECT id_periode FROM periode_aktif WHERE is_aktif = 1 LIMIT 1'
+    );
+
+    if (!activeRows[0]) {
+      isAktif = 1;
+    }
+
+    if (periodeId && isAktif === 0 && Number(activeRows[0]?.id_periode) === periodeId) {
+      throw createClientError('Harus ada satu periode aktif. Aktifkan periode lain sebelum menonaktifkan periode ini.');
+    }
+
     if (periodeId) {
       const [result] = await conn.query<ResultSetHeader>(
-        'UPDATE periode_aktif SET tahun=?, semester=?, updated_at=CURRENT_TIMESTAMP WHERE id_periode=?',
-        [tahun, semester, periodeId]
+        'UPDATE periode_aktif SET tahun=?, semester=?, is_aktif=?, updated_at=CURRENT_TIMESTAMP WHERE id_periode=?',
+        [tahun, semester, isAktif, periodeId]
       );
 
       if (result.affectedRows === 0) {
         throw createClientError('Periode aktif tidak ditemukan');
       }
     } else {
-      const [existing] = await conn.query<PeriodeAktif[]>(
-        'SELECT id_periode FROM periode_aktif ORDER BY id_periode DESC LIMIT 1'
+      const [result] = await conn.query<ResultSetHeader>(
+        'INSERT INTO periode_aktif (tahun, semester, is_aktif, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+        [tahun, semester, isAktif]
       );
-      periodeId = existing[0]?.id_periode ?? null;
-
-      if (periodeId) {
-        await conn.query<ResultSetHeader>(
-          'UPDATE periode_aktif SET tahun=?, semester=?, updated_at=CURRENT_TIMESTAMP WHERE id_periode=?',
-          [tahun, semester, periodeId]
-        );
-      } else {
-        const [result] = await conn.query<ResultSetHeader>(
-          'INSERT INTO periode_aktif (tahun, semester, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
-          [tahun, semester]
-        );
-        periodeId = result.insertId;
-      }
+      periodeId = result.insertId;
     }
 
-    await conn.query('DELETE FROM periode_aktif WHERE id_periode <> ?', [periodeId]);
+    if (isAktif === 1) {
+      await conn.query(
+        'UPDATE periode_aktif SET is_aktif = 0 WHERE id_periode <> ?',
+        [periodeId]
+      );
+    }
 
-    const updatedMahasiswa = await updateMahasiswaSemesterKe(conn, tahun, semester);
+    const updatedMahasiswa = isAktif === 1
+      ? await updateMahasiswaSemesterKe(conn, tahun, semester)
+      : 0;
 
     await conn.commit();
 
-    return { id: periodeId, updatedMahasiswa };
+    return { id: periodeId, is_aktif: isAktif, updatedMahasiswa };
   } catch (error) {
     await conn.rollback();
     throw error;
@@ -447,7 +493,9 @@ app.delete('/api/departemen/:id', async (c) => {
 app.get('/api/periodeaktif', async (c) => {
   try {
     const [rows] = await pool.query<PeriodeAktif[]>(
-      'SELECT id_periode, tahun, semester, updated_at FROM periode_aktif ORDER BY id_periode DESC LIMIT 1'
+      `SELECT id_periode, tahun, semester, is_aktif, updated_at
+       FROM periode_aktif
+       ORDER BY is_aktif DESC, tahun DESC, FIELD(semester, 'Genap', 'Ganjil'), id_periode DESC`
     );
     return c.json(rows);
   } catch (e) {
@@ -458,7 +506,7 @@ app.get('/api/periodeaktif', async (c) => {
 app.get('/api/periodeaktif/:id', async (c) => {
   try {
     const [rows] = await pool.query<PeriodeAktif[]>(
-      'SELECT id_periode, tahun, semester, updated_at FROM periode_aktif WHERE id_periode=?',
+      'SELECT id_periode, tahun, semester, is_aktif, updated_at FROM periode_aktif WHERE id_periode=?',
       [c.req.param('id')]
     );
     return c.json(rows[0] || null);
@@ -469,8 +517,8 @@ app.get('/api/periodeaktif/:id', async (c) => {
 
 app.post('/api/periodeaktif', async (c) => {
   try {
-    const { tahun, semester } = await c.req.json();
-    const result = await savePeriodeAktif(tahun, semester);
+    const { tahun, semester, is_aktif } = await c.req.json();
+    const result = await savePeriodeAktif(tahun, semester, is_aktif);
     return c.json({ success: true, ...result }, 201);
   } catch (e) {
     return handleError(c, e);
@@ -479,8 +527,8 @@ app.post('/api/periodeaktif', async (c) => {
 
 app.put('/api/periodeaktif/:id', async (c) => {
   try {
-    const { tahun, semester } = await c.req.json();
-    const result = await savePeriodeAktif(tahun, semester, c.req.param('id'));
+    const { tahun, semester, is_aktif } = await c.req.json();
+    const result = await savePeriodeAktif(tahun, semester, is_aktif, c.req.param('id'));
     return c.json({ success: true, ...result });
   } catch (e) {
     return handleError(c, e);
@@ -488,11 +536,39 @@ app.put('/api/periodeaktif/:id', async (c) => {
 });
 
 app.delete('/api/periodeaktif/:id', async (c) => {
+  const conn = await pool.getConnection();
+
   try {
-    await pool.query('DELETE FROM periode_aktif WHERE id_periode=?', [c.req.param('id')]);
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<PeriodeAktif[]>(
+      'SELECT id_periode, is_aktif FROM periode_aktif WHERE id_periode=?',
+      [c.req.param('id')]
+    );
+    const periode = rows[0];
+
+    await conn.query('DELETE FROM periode_aktif WHERE id_periode=?', [c.req.param('id')]);
+
+    if (periode?.is_aktif === 1) {
+      const [nextRows] = await conn.query<PeriodeAktif[]>(
+        'SELECT id_periode, tahun, semester FROM periode_aktif ORDER BY id_periode DESC LIMIT 1'
+      );
+      const nextPeriode = nextRows[0];
+
+      if (nextPeriode) {
+        await conn.query('UPDATE periode_aktif SET is_aktif = 1 WHERE id_periode=?', [nextPeriode.id_periode]);
+        await updateMahasiswaSemesterKe(conn, Number(nextPeriode.tahun), nextPeriode.semester);
+      }
+    }
+
+    await conn.commit();
+
     return c.json({ success: true });
   } catch (e) {
+    await conn.rollback();
     return handleError(c, e);
+  } finally {
+    conn.release();
   }
 });
 
@@ -748,26 +824,68 @@ app.post('/api/jadwal', async (c) => {
     const { hari, jam_mulai, jam_selesai, id_matkul, id_kelas, id_dosen } = await c.req.json();
     const periode = await getRequiredPeriodeAktif();
     const [res] = await pool.query<ResultSetHeader>(
-      'INSERT INTO jadwal (hari, jam_mulai, jam_selesai, semester, id_matkul, id_kelas, id_dosen) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [hari, jam_mulai, jam_selesai, periode.semester, id_matkul, id_kelas, id_dosen]
+      `INSERT INTO jadwal
+       (hari, jam_mulai, jam_selesai, semester, id_periode, id_matkul, id_kelas, id_dosen)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [hari, jam_mulai, jam_selesai, periode.semester, periode.id_periode, id_matkul, id_kelas, id_dosen]
     );
-    return c.json({ success: true, id: res.insertId, semester: periode.semester }, 201);
+    return c.json({ success: true, id: res.insertId, id_periode: periode.id_periode, semester: periode.semester }, 201);
   } catch (e) {
     return handleError(c, e);
   }
 });
 
 app.put('/api/jadwal/:id', async (c) => {
+  const conn = await pool.getConnection();
+
   try {
     const { hari, jam_mulai, jam_selesai, id_matkul, id_kelas, id_dosen } = await c.req.json();
-    const periode = await getRequiredPeriodeAktif();
-    await pool.query(
-      'UPDATE jadwal SET hari=?, jam_mulai=?, jam_selesai=?, semester=?, id_matkul=?, id_kelas=?, id_dosen=? WHERE id_jadwal=?',
-      [hari, jam_mulai, jam_selesai, periode.semester, id_matkul, id_kelas, id_dosen, c.req.param('id')]
+
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<Jadwal[]>('SELECT id_periode FROM jadwal WHERE id_jadwal=?', [c.req.param('id')]);
+    const jadwal = rows[0];
+
+    if (!jadwal) {
+      throw createClientError('Jadwal tidak ditemukan');
+    }
+
+    const periode = jadwal.id_periode
+      ? await getRequiredPeriodeById(conn, Number(jadwal.id_periode))
+      : await getRequiredPeriodeAktif(conn);
+
+    await conn.query(
+      `UPDATE jadwal
+       SET hari=?,
+           jam_mulai=?,
+           jam_selesai=?,
+           semester=?,
+           id_periode=?,
+           id_matkul=?,
+           id_kelas=?,
+           id_dosen=?
+       WHERE id_jadwal=?`,
+      [
+        hari,
+        jam_mulai,
+        jam_selesai,
+        periode.semester,
+        periode.id_periode,
+        id_matkul,
+        id_kelas,
+        id_dosen,
+        c.req.param('id'),
+      ]
     );
-    return c.json({ success: true, semester: periode.semester });
+
+    await conn.commit();
+
+    return c.json({ success: true, id_periode: periode.id_periode, semester: periode.semester });
   } catch (e) {
+    await conn.rollback();
     return handleError(c, e);
+  } finally {
+    conn.release();
   }
 });
 
@@ -807,19 +925,36 @@ app.post('/api/krs', async (c) => {
   try {
     const { NRP, status_krs } = await c.req.json();
     const statusKrs = status_krs || 'Diajukan';
-    const periode = await getRequiredPeriodeAktif(conn);
-    const tahunAjaran = String(periode.tahun);
 
     await conn.beginTransaction();
 
+    const periode = await getRequiredPeriodeAktif(conn);
+    const tahunAjaran = String(periode.tahun);
+    const [existing] = await conn.query<Krs[]>(
+      'SELECT id_krs FROM krs WHERE NRP=? AND id_periode=? LIMIT 1',
+      [NRP, periode.id_periode]
+    );
+
+    if (existing[0]) {
+      throw createClientError('Mahasiswa ini sudah memiliki KRS untuk periode aktif');
+    }
+
     const [res] = await conn.query<ResultSetHeader>(
-      'INSERT INTO krs (NRP, total_sks, status_krs, semester, tahun_ajaran, tanggal_pengajuan, tanggal_diproses) VALUES (?, ?, ?, ?, ?, NULL, NULL)',
-      [NRP, 0, statusKrs, periode.semester, tahunAjaran]
+      `INSERT INTO krs
+       (NRP, total_sks, status_krs, semester, tahun_ajaran, id_periode, tanggal_pengajuan, tanggal_diproses)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
+      [NRP, 0, statusKrs, periode.semester, tahunAjaran, periode.id_periode]
     );
 
     await conn.commit();
 
-    return c.json({ success: true, id: res.insertId, semester: periode.semester, tahun_ajaran: tahunAjaran }, 201);
+    return c.json({
+      success: true,
+      id: res.insertId,
+      id_periode: periode.id_periode,
+      semester: periode.semester,
+      tahun_ajaran: tahunAjaran,
+    }, 201);
   } catch (e) {
     await conn.rollback();
     return handleError(c, e);
@@ -833,10 +968,31 @@ app.put('/api/krs/:id', async (c) => {
 
   try {
     const { NRP, status_krs } = await c.req.json();
-    const periode = await getRequiredPeriodeAktif(conn);
-    const tahunAjaran = String(periode.tahun);
 
     await conn.beginTransaction();
+
+    const [rows] = await conn.query<Krs[]>(
+      'SELECT id_krs, id_periode FROM krs WHERE id_krs=?',
+      [c.req.param('id')]
+    );
+    const krs = rows[0];
+
+    if (!krs) {
+      throw createClientError('KRS tidak ditemukan');
+    }
+
+    const periode = krs.id_periode
+      ? await getRequiredPeriodeById(conn, Number(krs.id_periode))
+      : await getRequiredPeriodeAktif(conn);
+    const tahunAjaran = String(periode.tahun);
+    const [duplicate] = await conn.query<Krs[]>(
+      'SELECT id_krs FROM krs WHERE NRP=? AND id_periode=? AND id_krs<>? LIMIT 1',
+      [NRP, periode.id_periode, c.req.param('id')]
+    );
+
+    if (duplicate[0]) {
+      throw createClientError('Mahasiswa ini sudah memiliki KRS untuk periode tersebut');
+    }
 
     await conn.query(
       `UPDATE krs
@@ -848,15 +1004,31 @@ app.put('/api/krs/:id', async (c) => {
            NRP=?,
            status_krs=?,
            semester=?,
-           tahun_ajaran=?
+           tahun_ajaran=?,
+           id_periode=?
        WHERE id_krs=?`,
-      [status_krs, status_krs, status_krs, NRP, status_krs, periode.semester, tahunAjaran, c.req.param('id')]
+      [
+        status_krs,
+        status_krs,
+        status_krs,
+        NRP,
+        status_krs,
+        periode.semester,
+        tahunAjaran,
+        periode.id_periode,
+        c.req.param('id'),
+      ]
     );
 
     await updateMahasiswaStatusFromKrs(conn, Number(NRP), status_krs);
     await conn.commit();
 
-    return c.json({ success: true, semester: periode.semester, tahun_ajaran: tahunAjaran });
+    return c.json({
+      success: true,
+      id_periode: periode.id_periode,
+      semester: periode.semester,
+      tahun_ajaran: tahunAjaran,
+    });
   } catch (e) {
     await conn.rollback();
     return handleError(c, e);
@@ -934,6 +1106,32 @@ app.post('/api/detailkrs', async (c) => {
     const { status_matkul = 'Aktif', id_krs, id_jadwal } = await c.req.json();
 
     await conn.beginTransaction();
+
+    const [krsRows] = await conn.query<Krs[]>('SELECT id_krs, id_periode FROM krs WHERE id_krs=?', [id_krs]);
+    const [jadwalRows] = await conn.query<Jadwal[]>('SELECT id_jadwal, id_periode FROM jadwal WHERE id_jadwal=?', [id_jadwal]);
+    const krs = krsRows[0];
+    const jadwal = jadwalRows[0];
+
+    if (!krs) {
+      throw createClientError('KRS tidak ditemukan');
+    }
+
+    if (!jadwal) {
+      throw createClientError('Jadwal tidak ditemukan');
+    }
+
+    if (Number(krs.id_periode) !== Number(jadwal.id_periode)) {
+      throw createClientError('Jadwal harus berasal dari periode yang sama dengan KRS');
+    }
+
+    const [existing] = await conn.query<DetailKrs[]>(
+      'SELECT id_dkrs FROM detail_krs WHERE id_krs=? AND id_jadwal=? LIMIT 1',
+      [id_krs, id_jadwal]
+    );
+
+    if (existing[0]) {
+      throw createClientError('Jadwal ini sudah ada di detail KRS tersebut');
+    }
 
     const [res] = await conn.query<ResultSetHeader>(
       'INSERT INTO detail_krs (status_matkul, id_krs, id_jadwal) VALUES (?, ?, ?)',

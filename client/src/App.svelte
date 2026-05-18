@@ -42,6 +42,12 @@
   const roleOptions = ['admin', 'dosen', 'mahasiswa']
   const hariOptions = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
 
+  const periodeReference: ReferenceConfig = {
+    endpoint: '/api/periodeaktif',
+    valueField: 'id_periode',
+    labelFields: ['id_periode', 'tahun', 'semester'],
+  }
+
   const departemenReference: ReferenceConfig = {
     endpoint: '/api/departemen',
     valueField: 'id_departemen',
@@ -81,7 +87,7 @@
   const krsReference: ReferenceConfig = {
     endpoint: '/api/krs',
     valueField: 'id_krs',
-    labelFields: ['id_krs', 'NRP', 'semester', 'tahun_ajaran'],
+    labelFields: ['id_krs', 'NRP', 'id_periode', 'status_krs'],
   }
 
   const detailKrsReference: ReferenceConfig = {
@@ -113,10 +119,11 @@
         { name: 'id_periode', label: 'ID', type: 'number' },
         { name: 'tahun', label: 'Tahun', type: 'number' },
         { name: 'semester', label: 'Semester', options: semesterOptions },
+        { name: 'is_aktif', label: 'Aktif', type: 'checkbox' },
         { name: 'updated_at', label: 'Updated At' },
       ],
-      createFields: ['tahun', 'semester'],
-      updateFields: ['tahun', 'semester'],
+      createFields: ['tahun', 'semester', 'is_aktif'],
+      updateFields: ['tahun', 'semester', 'is_aktif'],
     },
     {
       key: 'mahasiswa',
@@ -186,6 +193,7 @@
         { name: 'jam_mulai', label: 'Jam Mulai', type: 'time' },
         { name: 'jam_selesai', label: 'Jam Selesai', type: 'time' },
         { name: 'semester', label: 'Semester', options: semesterOptions },
+        { name: 'id_periode', label: 'ID Periode', type: 'number', reference: periodeReference },
         { name: 'id_matkul', label: 'ID Matkul', type: 'number', reference: mataKuliahReference },
         { name: 'id_kelas', label: 'ID Kelas', type: 'number', reference: kelasReference },
         { name: 'id_dosen', label: 'ID Dosen', type: 'number', reference: dosenReference },
@@ -205,6 +213,7 @@
         { name: 'status_krs', label: 'Status KRS', options: statusKrsOptions },
         { name: 'semester', label: 'Semester', options: semesterOptions },
         { name: 'tahun_ajaran', label: 'Tahun Ajaran' },
+        { name: 'id_periode', label: 'ID Periode', type: 'number', reference: periodeReference },
         { name: 'tanggal_pengajuan', label: 'Tanggal Pengajuan' },
         { name: 'tanggal_diproses', label: 'Tanggal Diproses' },
       ],
@@ -446,17 +455,20 @@
 
   function setFieldValue(field: Field, event: Event) {
     const target = event.currentTarget as HTMLInputElement | HTMLSelectElement
+    const value = field.type === 'checkbox' && target instanceof HTMLInputElement
+      ? (target.checked ? 1 : 0)
+      : target.value
     const nextData: FormData = {
       ...formData,
-      [field.name]: target.value,
+      [field.name]: value,
     }
 
     if (resource.key === 'users' && field.name === 'role') {
-      if (target.value !== 'mahasiswa') {
+      if (value !== 'mahasiswa') {
         nextData.NRP = ''
       }
 
-      if (target.value !== 'dosen') {
+      if (value !== 'dosen') {
         nextData.id_dosen = ''
       }
     }
@@ -465,6 +477,10 @@
   }
 
   function normalizeValue(field: Field, value: string | number | null | undefined): string | number | null {
+    if (field.type === 'checkbox') {
+      return value === 1 || value === '1' ? 1 : 0
+    }
+
     if (field.type === 'number') {
       return value === '' || value === null || value === undefined ? null : Number(value)
     }
@@ -682,7 +698,13 @@
         {#each activeFields as field}
           <label>
             <span>{field.label}</span>
-            {#if field.options || field.reference}
+            {#if field.type === 'checkbox'}
+              <input
+                checked={formData[field.name] === 1 || formData[field.name] === '1'}
+                type="checkbox"
+                on:change={(event) => setFieldValue(field, event)}
+              />
+            {:else if field.options || field.reference}
               <select value={formData[field.name] ?? ''} on:change={(event) => setFieldValue(field, event)}>
                 <option value="">Pilih</option>
                 {#if field.options}
