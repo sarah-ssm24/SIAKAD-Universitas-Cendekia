@@ -91,9 +91,9 @@
   }
 
   const detailKrsReference: ReferenceConfig = {
-    endpoint: '/api/detailkrs',
+    endpoint: '/api/detailkrs/disetujui',
     valueField: 'id_dkrs',
-    labelFields: ['id_dkrs', 'id_krs', 'id_jadwal'],
+    labelFields: ['id_dkrs', 'NRP', 'nama_matkul', 'status_krs'],
   }
 
   const resources: Resource[] = [
