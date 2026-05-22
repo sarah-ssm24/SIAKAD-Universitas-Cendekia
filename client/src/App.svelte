@@ -40,7 +40,7 @@
   const statusKrsOptions = ['Diajukan', 'Disetujui', 'Ditolak']
   const statusMatkulOptions = ['Aktif', 'Lulus', 'Mengulang']
   const roleOptions = ['admin', 'dosen', 'mahasiswa']
-  const hariOptions = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
+  const hariOptions = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat']
 
   const periodeReference: ReferenceConfig = {
     endpoint: '/api/periodeaktif',
@@ -137,6 +137,7 @@
         { name: 'semester_ke', label: 'Semester Ke', type: 'number' },
         { name: 'status_aktif', label: 'Status Aktif', options: statusAktifOptions },
         { name: 'id_departemen', label: 'ID Departemen', type: 'number', reference: departemenReference },
+        { name: 'ipk', label: 'IPK', type: 'number' },
       ],
       createFields: ['nama_mahasiswa', 'angkatan', 'id_departemen'],
       updateFields: ['nama_mahasiswa', 'angkatan', 'id_departemen'],
@@ -192,7 +193,6 @@
         { name: 'hari', label: 'Hari', options: hariOptions },
         { name: 'jam_mulai', label: 'Jam Mulai', type: 'time' },
         { name: 'jam_selesai', label: 'Jam Selesai', type: 'time' },
-        { name: 'semester', label: 'Semester', options: semesterOptions },
         { name: 'id_periode', label: 'ID Periode', type: 'number', reference: periodeReference },
         { name: 'id_matkul', label: 'ID Matkul', type: 'number', reference: mataKuliahReference },
         { name: 'id_kelas', label: 'ID Kelas', type: 'number', reference: kelasReference },
@@ -210,9 +210,8 @@
         { name: 'id_krs', label: 'ID', type: 'number' },
         { name: 'NRP', label: 'NRP', type: 'number', reference: mahasiswaReference },
         { name: 'total_sks', label: 'Total SKS', type: 'number' },
+        { name: 'ips', label: 'IPS', type: 'number' },
         { name: 'status_krs', label: 'Status KRS', options: statusKrsOptions },
-        { name: 'semester', label: 'Semester', options: semesterOptions },
-        { name: 'tahun_ajaran', label: 'Tahun Ajaran' },
         { name: 'id_periode', label: 'ID Periode', type: 'number', reference: periodeReference },
         { name: 'tanggal_pengajuan', label: 'Tanggal Pengajuan' },
         { name: 'tanggal_diproses', label: 'Tanggal Diproses' },
@@ -247,6 +246,7 @@
         { name: 'nilai_akhir', label: 'Akhir', type: 'number' },
         { name: 'huruf_mutu', label: 'Huruf' },
         { name: 'id_dkrs', label: 'ID Detail KRS', type: 'number', reference: detailKrsReference },
+        { name: 'bobot_mutu', label: 'Bobot Mutu', type: 'number' },
       ],
       createFields: ['nilai_tugas', 'nilai_ETS', 'nilai_EAS', 'id_dkrs'],
       updateFields: ['nilai_tugas', 'nilai_ETS', 'nilai_EAS'],

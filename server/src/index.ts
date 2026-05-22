@@ -74,6 +74,7 @@ interface Mahasiswa extends RowDataPacket {
   semester_ke: number;
   status_aktif: string;
   id_departemen: number;
+  ipk: number;
 }
 
 interface PeriodeAktif extends RowDataPacket {
@@ -120,7 +121,6 @@ interface Jadwal extends RowDataPacket {
   hari: string;
   jam_mulai: string;
   jam_selesai: string;
-  semester: string;
   id_periode: number;
   id_matkul: number;
   id_kelas: number;
@@ -132,9 +132,8 @@ interface Krs extends RowDataPacket {
   NRP: number;
   total_sks: number;
   status_krs: string;
-  semester: string;
-  tahun_ajaran: string;
   id_periode: number;
+  ips: number;
   tanggal_pengajuan: string;
   tanggal_diproses: string | null;
 }
@@ -154,6 +153,7 @@ interface Nilai extends RowDataPacket {
   nilai_akhir: number;
   huruf_mutu: string;
   id_dkrs: number;
+  bobot_mutu: number;
 }
 
 
@@ -326,15 +326,16 @@ const normalizeUserRoleLinks = (roleInput: unknown, nrpInput: unknown, idDosenIn
   return { role: roleInput, NRP: null, id_dosen };
 };
 
-const assertDetailKrsCanReceiveNilai = async (idDkrsInput: unknown) => {
+const assertDetailKrsCanReceiveNilai = async (idDkrsInput: unknown, conn?: PoolConnection) => {
   const idDkrs = Number(idDkrsInput);
 
   if (!Number.isInteger(idDkrs) || idDkrs <= 0) {
     throw createClientError('ID Detail KRS tidak valid');
   }
 
-  const [rows] = await pool.query<(RowDataPacket & { status_krs: string })[]>(
-    `SELECT k.status_krs
+  const executor = conn ?? pool;
+  const [rows] = await executor.query<(RowDataPacket & { id_krs: number; NRP: number; status_krs: string })[]>(
+    `SELECT k.id_krs, k.NRP, k.status_krs
      FROM detail_krs dk
      JOIN krs k ON dk.id_krs = k.id_krs
      WHERE dk.id_dkrs = ?
@@ -351,7 +352,146 @@ const assertDetailKrsCanReceiveNilai = async (idDkrsInput: unknown) => {
     throw createClientError('Nilai hanya boleh diinput jika KRS sudah Disetujui');
   }
 
-  return idDkrs;
+  return {
+    idDkrs,
+    idKrs: Number(detailKrs.id_krs),
+    NRP: Number(detailKrs.NRP),
+  };
+};
+
+const parseNilaiComponent = (value: unknown, label: string) => {
+  if (value === null || value === undefined || value === '') {
+    throw createClientError(`${label} wajib diisi`);
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+    throw createClientError(`${label} harus berupa angka 0 sampai 100`);
+  }
+
+  return parsed;
+};
+
+const getHurufMutu = (nilaiAkhir: number) => {
+  if (nilaiAkhir >= 86) return 'A';
+  if (nilaiAkhir >= 76) return 'AB';
+  if (nilaiAkhir >= 66) return 'B';
+  if (nilaiAkhir >= 61) return 'BC';
+  if (nilaiAkhir >= 56) return 'C';
+  if (nilaiAkhir >= 41) return 'D';
+  return 'E';
+};
+
+const getBobotMutu = (hurufMutu: string) => {
+  const bobot: Record<string, number> = {
+    A: 4,
+    AB: 3.5,
+    B: 3,
+    BC: 2.5,
+    C: 2,
+    D: 1,
+    E: 0,
+  };
+
+  return bobot[hurufMutu] ?? 0;
+};
+
+const bobotMutuSql = `
+  CASE n.huruf_mutu
+    WHEN 'A' THEN 4.00
+    WHEN 'AB' THEN 3.50
+    WHEN 'B' THEN 3.00
+    WHEN 'BC' THEN 2.50
+    WHEN 'C' THEN 2.00
+    WHEN 'D' THEN 1.00
+    ELSE 0.00
+  END
+`;
+
+const getStatusMatkulFromHuruf = (hurufMutu: string) => (
+  ['A', 'AB', 'B', 'BC', 'C'].includes(hurufMutu) ? 'Lulus' : 'Mengulang'
+);
+
+const calculateNilaiResult = (
+  nilaiTugasInput: unknown,
+  nilaiEtsInput: unknown,
+  nilaiEasInput: unknown
+) => {
+  const nilai_tugas = parseNilaiComponent(nilaiTugasInput, 'Nilai tugas');
+  const nilai_ETS = parseNilaiComponent(nilaiEtsInput, 'Nilai ETS');
+  const nilai_EAS = parseNilaiComponent(nilaiEasInput, 'Nilai EAS');
+  const nilai_akhir = Math.round((nilai_tugas * 0.2) + (nilai_ETS * 0.35) + (nilai_EAS * 0.45));
+  const huruf_mutu = getHurufMutu(nilai_akhir);
+  const bobot_mutu = getBobotMutu(huruf_mutu);
+  const status_matkul = getStatusMatkulFromHuruf(huruf_mutu);
+
+  return { nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, bobot_mutu, status_matkul };
+};
+
+const recalculateAcademicIndexesForKrs = async (
+  conn: PoolConnection,
+  idKrs: number,
+  nrp: number
+) => {
+  await conn.query(
+    `UPDATE nilai n
+     JOIN detail_krs dk ON dk.id_dkrs = n.id_dkrs
+     JOIN krs k ON k.id_krs = dk.id_krs
+     SET n.bobot_mutu = ${bobotMutuSql}
+     WHERE k.NRP = ?`,
+    [nrp]
+  );
+
+  await conn.query(
+    `UPDATE krs target_krs
+     SET target_krs.ips = COALESCE((
+       SELECT ROUND(SUM(n.bobot_mutu * mk.sks) / NULLIF(SUM(mk.sks), 0), 2)
+       FROM detail_krs dk
+       JOIN nilai n ON n.id_dkrs = dk.id_dkrs
+       JOIN jadwal j ON j.id_jadwal = dk.id_jadwal
+       JOIN mata_kuliah mk ON mk.id_matkul = j.id_matkul
+       WHERE dk.id_krs = target_krs.id_krs
+     ), 0)
+     WHERE target_krs.id_krs = ?`,
+    [idKrs]
+  );
+
+  await conn.query(
+    `UPDATE mahasiswa target_mhs
+     SET target_mhs.ipk = COALESCE((
+       SELECT ROUND(SUM(n.bobot_mutu * mk.sks) / NULLIF(SUM(mk.sks), 0), 2)
+       FROM krs k
+       JOIN detail_krs dk ON dk.id_krs = k.id_krs
+       JOIN nilai n ON n.id_dkrs = dk.id_dkrs
+       JOIN jadwal j ON j.id_jadwal = dk.id_jadwal
+       JOIN mata_kuliah mk ON mk.id_matkul = j.id_matkul
+       WHERE k.NRP = target_mhs.NRP
+     ), 0)
+     WHERE target_mhs.NRP = ?`,
+    [nrp]
+  );
+};
+
+const recalculateAcademicIndexesFromDetail = async (
+  conn: PoolConnection,
+  idDkrs: number
+) => {
+  const [rows] = await conn.query<(RowDataPacket & { id_krs: number; NRP: number })[]>(
+    `SELECT dk.id_krs, k.NRP
+     FROM detail_krs dk
+     JOIN krs k ON k.id_krs = dk.id_krs
+     WHERE dk.id_dkrs = ?
+     LIMIT 1`,
+    [idDkrs]
+  );
+  const context = rows[0];
+
+  if (!context) {
+    return;
+  }
+
+  await recalculateAcademicIndexesForKrs(conn, Number(context.id_krs), Number(context.NRP));
 };
 
 const updateMahasiswaSemesterKe = async (
@@ -853,11 +993,11 @@ app.post('/api/jadwal', async (c) => {
     const periode = await getRequiredPeriodeAktif();
     const [res] = await pool.query<ResultSetHeader>(
       `INSERT INTO jadwal
-       (hari, jam_mulai, jam_selesai, semester, id_periode, id_matkul, id_kelas, id_dosen)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [hari, jam_mulai, jam_selesai, periode.semester, periode.id_periode, id_matkul, id_kelas, id_dosen]
+       (hari, jam_mulai, jam_selesai, id_periode, id_matkul, id_kelas, id_dosen)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [hari, jam_mulai, jam_selesai, periode.id_periode, id_matkul, id_kelas, id_dosen]
     );
-    return c.json({ success: true, id: res.insertId, id_periode: periode.id_periode, semester: periode.semester }, 201);
+    return c.json({ success: true, id: res.insertId, id_periode: periode.id_periode }, 201);
   } catch (e) {
     return handleError(c, e);
   }
@@ -887,7 +1027,6 @@ app.put('/api/jadwal/:id', async (c) => {
        SET hari=?,
            jam_mulai=?,
            jam_selesai=?,
-           semester=?,
            id_periode=?,
            id_matkul=?,
            id_kelas=?,
@@ -897,7 +1036,6 @@ app.put('/api/jadwal/:id', async (c) => {
         hari,
         jam_mulai,
         jam_selesai,
-        periode.semester,
         periode.id_periode,
         id_matkul,
         id_kelas,
@@ -908,7 +1046,7 @@ app.put('/api/jadwal/:id', async (c) => {
 
     await conn.commit();
 
-    return c.json({ success: true, id_periode: periode.id_periode, semester: periode.semester });
+    return c.json({ success: true, id_periode: periode.id_periode });
   } catch (e) {
     await conn.rollback();
     return handleError(c, e);
@@ -957,7 +1095,6 @@ app.post('/api/krs', async (c) => {
     await conn.beginTransaction();
 
     const periode = await getRequiredPeriodeAktif(conn);
-    const tahunAjaran = String(periode.tahun);
     const [existing] = await conn.query<Krs[]>(
       'SELECT id_krs FROM krs WHERE NRP=? AND id_periode=? LIMIT 1',
       [NRP, periode.id_periode]
@@ -969,9 +1106,9 @@ app.post('/api/krs', async (c) => {
 
     const [res] = await conn.query<ResultSetHeader>(
       `INSERT INTO krs
-       (NRP, total_sks, status_krs, semester, tahun_ajaran, id_periode, tanggal_pengajuan, tanggal_diproses)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
-      [NRP, 0, statusKrs, periode.semester, tahunAjaran, periode.id_periode]
+       (NRP, total_sks, status_krs, id_periode, tanggal_pengajuan, tanggal_diproses)
+       VALUES (?, ?, ?, ?, NULL, NULL)`,
+      [NRP, 0, statusKrs, periode.id_periode]
     );
 
     await conn.commit();
@@ -980,8 +1117,6 @@ app.post('/api/krs', async (c) => {
       success: true,
       id: res.insertId,
       id_periode: periode.id_periode,
-      semester: periode.semester,
-      tahun_ajaran: tahunAjaran,
     }, 201);
   } catch (e) {
     await conn.rollback();
@@ -1012,7 +1147,6 @@ app.put('/api/krs/:id', async (c) => {
     const periode = krs.id_periode
       ? await getRequiredPeriodeById(conn, Number(krs.id_periode))
       : await getRequiredPeriodeAktif(conn);
-    const tahunAjaran = String(periode.tahun);
     const [duplicate] = await conn.query<Krs[]>(
       'SELECT id_krs FROM krs WHERE NRP=? AND id_periode=? AND id_krs<>? LIMIT 1',
       [NRP, periode.id_periode, c.req.param('id')]
@@ -1031,8 +1165,6 @@ app.put('/api/krs/:id', async (c) => {
            END,
            NRP=?,
            status_krs=?,
-           semester=?,
-           tahun_ajaran=?,
            id_periode=?
        WHERE id_krs=?`,
       [
@@ -1041,8 +1173,6 @@ app.put('/api/krs/:id', async (c) => {
         status_krs,
         NRP,
         status_krs,
-        periode.semester,
-        tahunAjaran,
         periode.id_periode,
         c.req.param('id'),
       ]
@@ -1054,8 +1184,6 @@ app.put('/api/krs/:id', async (c) => {
     return c.json({
       success: true,
       id_periode: periode.id_periode,
-      semester: periode.semester,
-      tahun_ajaran: tahunAjaran,
     });
   } catch (e) {
     await conn.rollback();
@@ -1132,7 +1260,9 @@ app.get('/api/detailkrs/disetujui', async (c) => {
        JOIN krs k ON dk.id_krs = k.id_krs
        JOIN jadwal j ON dk.id_jadwal = j.id_jadwal
        JOIN mata_kuliah mk ON j.id_matkul = mk.id_matkul
+       LEFT JOIN nilai n ON n.id_dkrs = dk.id_dkrs
        WHERE k.status_krs = 'Disetujui'
+         AND n.id_nilai IS NULL
        ORDER BY dk.id_dkrs DESC`
     );
     return c.json(rows);
@@ -1231,11 +1361,35 @@ app.put('/api/detailkrs/:id', async (c) => {
 });
 
 app.delete('/api/detailkrs/:id', async (c) => {
+  const conn = await pool.getConnection();
+
   try {
-    await pool.query('DELETE FROM detail_krs WHERE id_dkrs=?', [c.req.param('id')]);
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<(RowDataPacket & { id_krs: number; NRP: number })[]>(
+      `SELECT dk.id_krs, k.NRP
+       FROM detail_krs dk
+       JOIN krs k ON k.id_krs = dk.id_krs
+       WHERE dk.id_dkrs = ?
+       LIMIT 1`,
+      [c.req.param('id')]
+    );
+    const context = rows[0];
+
+    await conn.query('DELETE FROM detail_krs WHERE id_dkrs=?', [c.req.param('id')]);
+
+    if (context) {
+      await recalculateAcademicIndexesForKrs(conn, Number(context.id_krs), Number(context.NRP));
+    }
+
+    await conn.commit();
+
     return c.json({ success: true });
   } catch (e) {
+    await conn.rollback();
     return handleError(c, e);
+  } finally {
+    conn.release();
   }
 });
 
@@ -1261,46 +1415,131 @@ app.get('/api/nilai/:id', async (c) => {
 });
 
 app.post('/api/nilai', async (c) => {
+  const conn = await pool.getConnection();
+
   try {
+    await conn.beginTransaction();
+
     const { nilai_tugas, nilai_ETS, nilai_EAS, id_dkrs } = await c.req.json();
-    const approvedDetailKrsId = await assertDetailKrsCanReceiveNilai(id_dkrs);
-    const [res] = await pool.query<ResultSetHeader>(
-      'INSERT INTO nilai (nilai_tugas, nilai_ETS, nilai_EAS, id_dkrs) VALUES (?, ?, ?, ?)',
-      [nilai_tugas, nilai_ETS, nilai_EAS, approvedDetailKrsId]
+    const detail = await assertDetailKrsCanReceiveNilai(id_dkrs, conn);
+    const nilai = calculateNilaiResult(nilai_tugas, nilai_ETS, nilai_EAS);
+    const [existing] = await conn.query<Nilai[]>(
+      'SELECT id_nilai FROM nilai WHERE id_dkrs=? LIMIT 1',
+      [detail.idDkrs]
     );
-    return c.json({ success: true, id: res.insertId }, 201);
+
+    if (existing[0]) {
+      throw createClientError('Detail KRS ini sudah memiliki nilai');
+    }
+
+    const [res] = await conn.query<ResultSetHeader>(
+      `INSERT INTO nilai
+       (nilai_tugas, nilai_ETS, nilai_EAS, nilai_akhir, huruf_mutu, id_dkrs, bobot_mutu)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        nilai.nilai_tugas,
+        nilai.nilai_ETS,
+        nilai.nilai_EAS,
+        nilai.nilai_akhir,
+        nilai.huruf_mutu,
+        detail.idDkrs,
+        nilai.bobot_mutu,
+      ]
+    );
+
+    await conn.query(
+      'UPDATE detail_krs SET status_matkul=? WHERE id_dkrs=?',
+      [nilai.status_matkul, detail.idDkrs]
+    );
+    await recalculateAcademicIndexesForKrs(conn, detail.idKrs, detail.NRP);
+    await conn.commit();
+
+    return c.json({ success: true, id: res.insertId, ...nilai }, 201);
   } catch (e) {
+    await conn.rollback();
     return handleError(c, e);
+  } finally {
+    conn.release();
   }
 });
 
 app.put('/api/nilai/:id', async (c) => {
+  const conn = await pool.getConnection();
+
   try {
+    await conn.beginTransaction();
+
     const { nilai_tugas, nilai_ETS, nilai_EAS } = await c.req.json();
-    const [rows] = await pool.query<Nilai[]>('SELECT id_dkrs FROM nilai WHERE id_nilai=?', [c.req.param('id')]);
+    const [rows] = await conn.query<Nilai[]>('SELECT id_dkrs FROM nilai WHERE id_nilai=?', [c.req.param('id')]);
+    const existingNilai = rows[0];
+
+    if (!existingNilai) {
+      throw createClientError('Nilai tidak ditemukan');
+    }
+
+    const detail = await assertDetailKrsCanReceiveNilai(existingNilai.id_dkrs, conn);
+    const nilai = calculateNilaiResult(nilai_tugas, nilai_ETS, nilai_EAS);
+
+    await conn.query(
+      `UPDATE nilai
+       SET nilai_tugas=?,
+           nilai_ETS=?,
+           nilai_EAS=?,
+           nilai_akhir=?,
+           huruf_mutu=?,
+           bobot_mutu=?
+       WHERE id_nilai=?`,
+      [
+        nilai.nilai_tugas,
+        nilai.nilai_ETS,
+        nilai.nilai_EAS,
+        nilai.nilai_akhir,
+        nilai.huruf_mutu,
+        nilai.bobot_mutu,
+        c.req.param('id'),
+      ]
+    );
+
+    await conn.query(
+      'UPDATE detail_krs SET status_matkul=? WHERE id_dkrs=?',
+      [nilai.status_matkul, detail.idDkrs]
+    );
+    await recalculateAcademicIndexesForKrs(conn, detail.idKrs, detail.NRP);
+    await conn.commit();
+
+    return c.json({ success: true, ...nilai });
+  } catch (e) {
+    await conn.rollback();
+    return handleError(c, e);
+  } finally {
+    conn.release();
+  }
+});
+
+app.delete('/api/nilai/:id', async (c) => {
+  const conn = await pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<Nilai[]>('SELECT id_dkrs FROM nilai WHERE id_nilai=?', [c.req.param('id')]);
     const nilai = rows[0];
 
     if (!nilai) {
       throw createClientError('Nilai tidak ditemukan');
     }
 
-    await assertDetailKrsCanReceiveNilai(nilai.id_dkrs);
-    await pool.query(
-      'UPDATE nilai SET nilai_tugas=?, nilai_ETS=?, nilai_EAS=? WHERE id_nilai=?',
-      [nilai_tugas, nilai_ETS, nilai_EAS, c.req.param('id')]
-    );
-    return c.json({ success: true });
-  } catch (e) {
-    return handleError(c, e);
-  }
-});
+    await conn.query('DELETE FROM nilai WHERE id_nilai=?', [c.req.param('id')]);
+    await conn.query('UPDATE detail_krs SET status_matkul=? WHERE id_dkrs=?', ['Aktif', nilai.id_dkrs]);
+    await recalculateAcademicIndexesFromDetail(conn, Number(nilai.id_dkrs));
+    await conn.commit();
 
-app.delete('/api/nilai/:id', async (c) => {
-  try {
-    await pool.query('DELETE FROM nilai WHERE id_nilai=?', [c.req.param('id')]);
     return c.json({ success: true });
   } catch (e) {
+    await conn.rollback();
     return handleError(c, e);
+  } finally {
+    conn.release();
   }
 });
 
@@ -1329,11 +1568,15 @@ app.post('/api/users', async (c) => {
   try {
     const { email, password, role, NRP, id_dosen } = await c.req.json();
     const userLinks = normalizeUserRoleLinks(role, NRP, id_dosen);
-    const [res] = await pool.query<ResultSetHeader>(
-      'INSERT INTO users (email, password, role, NRP, id_dosen) VALUES (?, ?, ?, ?, ?)',
-      [email, password, userLinks.role, userLinks.NRP, userLinks.id_dosen]
+    const [nextRows] = await pool.query<(RowDataPacket & { next_id: number })[]>(
+      'SELECT COALESCE(MAX(id_user), 0) + 1 AS next_id FROM users'
     );
-    return c.json({ success: true, id: res.insertId }, 201);
+    const nextId = Number(nextRows[0]?.next_id ?? 1);
+    const [res] = await pool.query<ResultSetHeader>(
+      'INSERT INTO users (id_user, email, password, role, NRP, id_dosen) VALUES (?, ?, ?, ?, ?, ?)',
+      [nextId, email, password, userLinks.role, userLinks.NRP, userLinks.id_dosen]
+    );
+    return c.json({ success: true, id: res.insertId || nextId }, 201);
   } catch (e) {
     return handleError(c, e);
   }
