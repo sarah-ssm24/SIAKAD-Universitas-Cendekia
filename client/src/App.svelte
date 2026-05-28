@@ -93,7 +93,7 @@
   const detailKrsReference: ReferenceConfig = {
     endpoint: '/api/detailkrs/disetujui',
     valueField: 'id_dkrs',
-    labelFields: ['id_dkrs', 'NRP', 'nama_matkul', 'status_krs'],
+    labelFields: ['id_dkrs', 'NRP', 'nama_matkul', 'tahun', 'semester', 'status_krs'],
   }
 
   const resources: Resource[] = [
@@ -137,10 +137,11 @@
         { name: 'semester_ke', label: 'Semester Ke', type: 'number' },
         { name: 'status_aktif', label: 'Status Aktif', options: statusAktifOptions },
         { name: 'id_departemen', label: 'ID Departemen', type: 'number', reference: departemenReference },
+        { name: 'id_dosen_wali', label: 'Dosen Wali', type: 'number', nullable: true, reference: dosenReference },
         { name: 'ipk', label: 'IPK', type: 'number' },
       ],
-      createFields: ['nama_mahasiswa', 'angkatan', 'id_departemen'],
-      updateFields: ['nama_mahasiswa', 'angkatan', 'id_departemen'],
+      createFields: ['nama_mahasiswa', 'angkatan', 'id_departemen', 'id_dosen_wali'],
+      updateFields: ['nama_mahasiswa', 'angkatan', 'id_departemen', 'id_dosen_wali'],
     },
     {
       key: 'dosen',
@@ -229,6 +230,10 @@
         { name: 'status_matkul', label: 'Status Matkul', options: statusMatkulOptions },
         { name: 'id_krs', label: 'ID KRS', type: 'number', reference: krsReference },
         { name: 'id_jadwal', label: 'ID Jadwal', type: 'number', reference: jadwalReference },
+        { name: 'NRP', label: 'NRP', type: 'number' },
+        { name: 'nama_matkul', label: 'Mata Kuliah' },
+        { name: 'tahun', label: 'Tahun', type: 'number' },
+        { name: 'semester', label: 'Semester' },
       ],
       createFields: ['status_matkul', 'id_krs', 'id_jadwal'],
       updateFields: ['status_matkul'],
@@ -437,6 +442,7 @@
 
     selectedKey = key
     searchTerm = ''
+    errorMessage = ''
     successMessage = ''
     resetForm('create', null, nextResource)
     fetchRows(nextResource)
@@ -444,16 +450,20 @@
   }
 
   function refreshCurrentResource() {
+    errorMessage = ''
+    successMessage = ''
     fetchRows()
     loadReferenceOptions()
   }
 
   function editRow(row: DataRow) {
+    errorMessage = ''
     successMessage = ''
     resetForm('edit', row)
   }
 
   function setFieldValue(field: Field, event: Event) {
+    errorMessage = ''
     const target = event.currentTarget as HTMLInputElement | HTMLSelectElement
     const value = field.type === 'checkbox' && target instanceof HTMLInputElement
       ? (target.checked ? 1 : 0)

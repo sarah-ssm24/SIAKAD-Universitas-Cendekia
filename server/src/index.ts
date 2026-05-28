@@ -74,6 +74,7 @@ interface Mahasiswa extends RowDataPacket {
   semester_ke: number;
   status_aktif: string;
   id_departemen: number;
+  id_dosen_wali: number | null;
   ipk: number;
 }
 
@@ -763,11 +764,13 @@ app.get('/api/mahasiswa/:id', async (c) => {
 
 app.post('/api/mahasiswa', async (c) => {
   try {
-    const { nama_mahasiswa, angkatan, id_departemen } = await c.req.json();
+    const { nama_mahasiswa, angkatan, id_departemen, id_dosen_wali } = await c.req.json();
     const semester_ke = await getSemesterKeForAngkatan(Number(angkatan));
     const [res] = await pool.query<ResultSetHeader>(
-      'INSERT INTO mahasiswa (nama_mahasiswa, angkatan, semester_ke, id_departemen) VALUES (?, ?, ?, ?)',
-      [nama_mahasiswa, angkatan, semester_ke, id_departemen]
+      `INSERT INTO mahasiswa
+       (nama_mahasiswa, angkatan, semester_ke, id_departemen, id_dosen_wali)
+       VALUES (?, ?, ?, ?, ?)`,
+      [nama_mahasiswa, angkatan, semester_ke, id_departemen, id_dosen_wali ?? null]
     );
     return c.json({ success: true, id: res.insertId }, 201);
   } catch (e) {
@@ -777,11 +780,17 @@ app.post('/api/mahasiswa', async (c) => {
 
 app.put('/api/mahasiswa/:id', async (c) => {
   try {
-    const { nama_mahasiswa, angkatan, id_departemen } = await c.req.json();
+    const { nama_mahasiswa, angkatan, id_departemen, id_dosen_wali } = await c.req.json();
     const semester_ke = await getSemesterKeForAngkatan(Number(angkatan));
     await pool.query(
-      'UPDATE mahasiswa SET nama_mahasiswa=?, angkatan=?, semester_ke=?, id_departemen=? WHERE NRP=?',
-      [nama_mahasiswa, angkatan, semester_ke, id_departemen, c.req.param('id')]
+      `UPDATE mahasiswa
+       SET nama_mahasiswa=?,
+           angkatan=?,
+           semester_ke=?,
+           id_departemen=?,
+           id_dosen_wali=?
+       WHERE NRP=?`,
+      [nama_mahasiswa, angkatan, semester_ke, id_departemen, id_dosen_wali ?? null, c.req.param('id')]
     );
     return c.json({ success: true });
   } catch (e) {
@@ -1239,7 +1248,23 @@ app.delete('/api/krs/:id', async (c) => {
 // ------------------------------------------
 app.get('/api/detailkrs', async (c) => {
   try {
-    const [rows] = await pool.query<DetailKrs[]>('SELECT * FROM detail_krs');
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT dk.id_dkrs,
+              dk.status_matkul,
+              dk.id_krs,
+              dk.id_jadwal,
+              k.NRP,
+              k.status_krs,
+              pa.tahun,
+              pa.semester,
+              mk.nama_matkul
+       FROM detail_krs dk
+       JOIN krs k ON dk.id_krs = k.id_krs
+       LEFT JOIN periode_aktif pa ON pa.id_periode = k.id_periode
+       JOIN jadwal j ON dk.id_jadwal = j.id_jadwal
+       JOIN mata_kuliah mk ON j.id_matkul = mk.id_matkul
+       ORDER BY dk.id_dkrs DESC`
+    );
     return c.json(rows);
   } catch (e) {
     return handleError(c, e);
@@ -1255,14 +1280,15 @@ app.get('/api/detailkrs/disetujui', async (c) => {
               dk.id_jadwal,
               k.NRP,
               k.status_krs,
+              pa.tahun,
+              pa.semester,
               mk.nama_matkul
        FROM detail_krs dk
        JOIN krs k ON dk.id_krs = k.id_krs
+       LEFT JOIN periode_aktif pa ON pa.id_periode = k.id_periode
        JOIN jadwal j ON dk.id_jadwal = j.id_jadwal
        JOIN mata_kuliah mk ON j.id_matkul = mk.id_matkul
-       LEFT JOIN nilai n ON n.id_dkrs = dk.id_dkrs
        WHERE k.status_krs = 'Disetujui'
-         AND n.id_nilai IS NULL
        ORDER BY dk.id_dkrs DESC`
     );
     return c.json(rows);
@@ -1273,7 +1299,25 @@ app.get('/api/detailkrs/disetujui', async (c) => {
 
 app.get('/api/detailkrs/:id', async (c) => {
   try {
-    const [rows] = await pool.query<DetailKrs[]>('SELECT * FROM detail_krs WHERE id_dkrs=?', [c.req.param('id')]);
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT dk.id_dkrs,
+              dk.status_matkul,
+              dk.id_krs,
+              dk.id_jadwal,
+              k.NRP,
+              k.status_krs,
+              pa.tahun,
+              pa.semester,
+              mk.nama_matkul
+       FROM detail_krs dk
+       JOIN krs k ON dk.id_krs = k.id_krs
+       LEFT JOIN periode_aktif pa ON pa.id_periode = k.id_periode
+       JOIN jadwal j ON dk.id_jadwal = j.id_jadwal
+       JOIN mata_kuliah mk ON j.id_matkul = mk.id_matkul
+       WHERE dk.id_dkrs=?
+       LIMIT 1`,
+      [c.req.param('id')]
+    );
     return c.json(rows[0] || null);
   } catch (e) {
     return handleError(c, e);
