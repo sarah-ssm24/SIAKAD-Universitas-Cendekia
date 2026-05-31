@@ -116,6 +116,7 @@ interface MataKuliah extends RowDataPacket {
   id_matkul: string;
   nama_matkul: string;
   sks: number;
+  id_departemen: number;
 }
 
 interface Kelas extends RowDataPacket {
@@ -954,11 +955,12 @@ app.get('/api/matakuliah/:id', async (c) => {
 
 app.post('/api/matakuliah', async (c) => {
   try {
-    const { id_matkul, nama_matkul, sks } = await c.req.json();
+    const { id_matkul, nama_matkul, sks, id_departemen } = await c.req.json();
     const parsedIdMatkul = parseRequiredText(id_matkul, 'ID Mata Kuliah');
+    const parsedDepartemenId = parseRequiredPositiveInt(id_departemen, 'Departemen');
     const [res] = await pool.query<ResultSetHeader>(
-      'INSERT INTO mata_kuliah (id_matkul, nama_matkul, sks) VALUES (?, ?, ?)',
-      [parsedIdMatkul, nama_matkul, sks]
+      'INSERT INTO mata_kuliah (id_matkul, nama_matkul, sks, id_departemen) VALUES (?, ?, ?, ?)',
+      [parsedIdMatkul, nama_matkul, sks, parsedDepartemenId]
     );
     recordActivity(`Mata kuliah baru dibuat: ${nama_matkul}.`);
     return c.json({ success: true, id: res.insertId || parsedIdMatkul }, 201);
@@ -969,10 +971,11 @@ app.post('/api/matakuliah', async (c) => {
 
 app.put('/api/matakuliah/:id', async (c) => {
   try {
-    const { nama_matkul, sks } = await c.req.json();
+    const { nama_matkul, sks, id_departemen } = await c.req.json();
+    const parsedDepartemenId = parseRequiredPositiveInt(id_departemen, 'Departemen');
     await pool.query(
-      'UPDATE mata_kuliah SET nama_matkul=?, sks=? WHERE id_matkul=?',
-      [nama_matkul, sks, c.req.param('id')]
+      'UPDATE mata_kuliah SET nama_matkul=?, sks=?, id_departemen=? WHERE id_matkul=?',
+      [nama_matkul, sks, parsedDepartemenId, c.req.param('id')]
     );
     recordActivity(`Mata kuliah diperbarui: ${nama_matkul}.`);
     return c.json({ success: true });
@@ -1339,6 +1342,9 @@ app.get('/api/detailkrs', async (c) => {
               k.status_krs,
               pa.tahun,
               pa.semester,
+              mk.id_matkul,
+              mk.sks,
+              mk.id_departemen,
               mk.nama_matkul
        FROM detail_krs dk
        JOIN krs k ON dk.id_krs = k.id_krs
@@ -1364,6 +1370,9 @@ app.get('/api/detailkrs/disetujui', async (c) => {
               k.status_krs,
               pa.tahun,
               pa.semester,
+              mk.id_matkul,
+              mk.sks,
+              mk.id_departemen,
               mk.nama_matkul
        FROM detail_krs dk
        JOIN krs k ON dk.id_krs = k.id_krs
@@ -1390,6 +1399,9 @@ app.get('/api/detailkrs/:id', async (c) => {
               k.status_krs,
               pa.tahun,
               pa.semester,
+              mk.id_matkul,
+              mk.sks,
+              mk.id_departemen,
               mk.nama_matkul
        FROM detail_krs dk
        JOIN krs k ON dk.id_krs = k.id_krs
@@ -1414,8 +1426,17 @@ app.post('/api/detailkrs', async (c) => {
 
     await conn.beginTransaction();
 
-    const [krsRows] = await conn.query<Krs[]>('SELECT id_krs, id_periode FROM krs WHERE id_krs=?', [id_krs]);
-    const [jadwalRows] = await conn.query<Jadwal[]>('SELECT id_jadwal, id_periode FROM jadwal WHERE id_jadwal=?', [id_jadwal]);
+    const [krsRows] = await conn.query<Krs[]>('SELECT id_krs, id_periode, NRP FROM krs WHERE id_krs=?', [id_krs]);
+    const [jadwalRows] = await conn.query<RowDataPacket[]>(
+      `SELECT j.id_jadwal,
+              j.id_periode,
+              j.id_matkul,
+              mk.id_departemen AS id_departemen_matkul
+       FROM jadwal j
+       JOIN mata_kuliah mk ON mk.id_matkul = j.id_matkul
+       WHERE j.id_jadwal=?`,
+      [id_jadwal]
+    );
     const krs = krsRows[0];
     const jadwal = jadwalRows[0];
 
@@ -1429,6 +1450,20 @@ app.post('/api/detailkrs', async (c) => {
 
     if (Number(krs.id_periode) !== Number(jadwal.id_periode)) {
       throw createClientError('Jadwal harus berasal dari periode yang sama dengan KRS');
+    }
+
+    const [mahasiswaRows] = await conn.query<RowDataPacket[]>(
+      'SELECT id_departemen FROM mahasiswa WHERE NRP=? LIMIT 1',
+      [krs.NRP]
+    );
+    const mahasiswa = mahasiswaRows[0];
+
+    if (!mahasiswa) {
+      throw createClientError('Mahasiswa KRS tidak ditemukan');
+    }
+
+    if (Number(mahasiswa.id_departemen) !== Number(jadwal.id_departemen_matkul)) {
+      throw createClientError('Mahasiswa hanya bisa mengambil mata kuliah dari departemennya');
     }
 
     const [existing] = await conn.query<DetailKrs[]>(

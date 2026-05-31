@@ -172,9 +172,10 @@
         { name: 'id_matkul', label: 'ID Mata Kuliah' },
         { name: 'nama_matkul', label: 'Nama Mata Kuliah' },
         { name: 'sks', label: 'SKS', type: 'number' },
+        { name: 'id_departemen', label: 'Departemen', type: 'number', reference: departemenReference },
       ],
-      createFields: ['id_matkul', 'nama_matkul', 'sks'],
-      updateFields: ['nama_matkul', 'sks'],
+      createFields: ['id_matkul', 'nama_matkul', 'sks', 'id_departemen'],
+      updateFields: ['nama_matkul', 'sks', 'id_departemen'],
     },
     {
       key: 'krs',
@@ -329,6 +330,13 @@
   let isSaving = false
   let errorMessage = ''
   let successMessage = ''
+  let isInitialDataLoading = true
+  let mahasiswaDepartemenFilter: DataValue = ''
+  let mahasiswaAngkatanFilter: DataValue = ''
+  let dosenDepartemenFilter: DataValue = ''
+  let mataKuliahDepartemenFilter: DataValue = ''
+  let jadwalDepartemenFilter: DataValue = ''
+  let jadwalPeriodeFilter: DataValue = ''
   let referenceOptions: Record<string, ReferenceOption[]> = {}
   let allData: Record<string, DataRow[]> = {}
   let dataVersion = 0
@@ -347,11 +355,7 @@
   $: resource = getResource(selectedKey)
   $: activeFields = resource ? getActiveFields(resource, formMode, formData.role) : []
   $: filteredRows = resource
-    ? rows.filter((row) =>
-        Object.values(row).some((value) =>
-          String(value ?? '').toLowerCase().includes(searchTerm.trim().toLowerCase())
-        )
-      )
+    ? getFilteredRows(resource, rows, searchTerm, mahasiswaDepartemenFilter, mahasiswaAngkatanFilter, dosenDepartemenFilter, mataKuliahDepartemenFilter, jadwalDepartemenFilter, jadwalPeriodeFilter, dataVersion)
     : []
   $: activePeriode = getActivePeriode(dataVersion)
   $: syncSelectedNilaiMatkul(dataVersion, selectedKey, currentUser?.role)
@@ -362,7 +366,7 @@
       : adminNav
 
   onMount(() => {
-    loadAllData()
+    loadInitialData()
   })
 
   async function readResponse(response: Response) {
@@ -381,24 +385,47 @@
     return data
   }
 
-  async function loadAllData() {
-    try {
-      const entries = await Promise.all(
+  function wait(ms: number) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms))
+  }
+
+  async function loadInitialData() {
+    isInitialDataLoading = true
+    await loadAllData({ retries: 3 })
+    isInitialDataLoading = false
+  }
+
+  async function loadAllData(options: { retries?: number } = {}) {
+    const attempts = Math.max(1, options.retries ?? 1)
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const results = await Promise.all(
         collections.map(async (collection) => {
           try {
             const data = await fetchJson(collection.endpoint)
-            return [collection.key, Array.isArray(data) ? data : []] as const
+            return {
+              key: collection.key,
+              rows: Array.isArray(data) ? data : [],
+              ok: true,
+            }
           } catch {
-            return [collection.key, []] as const
+            return {
+              key: collection.key,
+              rows: getCollection(collection.key),
+              ok: false,
+            }
           }
         })
       )
 
-      allData = Object.fromEntries(entries)
+      allData = Object.fromEntries(results.map((result) => [result.key, result.rows]))
       dataVersion += 1
-    } catch {
-      allData = {}
-      dataVersion += 1
+
+      if (results.some((result) => result.ok) || attempt === attempts) {
+        return
+      }
+
+      await wait(500 * attempt)
     }
   }
 
@@ -535,6 +562,26 @@
     referenceOptions = nextOptions
   }
 
+  function getFieldOptions(field: Field, selectedDepartemen: DataValue = formData.id_departemen, _version = dataVersion) {
+    const options = field.reference ? referenceOptions[getFieldReferenceKey(field)] ?? [] : []
+
+    if (resource?.key !== 'mahasiswa' || field.name !== 'id_dosen_wali') {
+      return options
+    }
+
+    if (!selectedDepartemen) {
+      return []
+    }
+
+    const allowedDosenIds = new Set(
+      getCollection('dosen')
+        .filter((row) => sameId(row.id_departemen, selectedDepartemen))
+        .map((row) => String(row.id_dosen))
+    )
+
+    return options.filter((option) => allowedDosenIds.has(String(option.value)))
+  }
+
   function resetForm(mode: FormMode = 'create', row: DataRow | null = null, resourceConfig: Resource | null = resource) {
     if (!resourceConfig) {
       formMode = mode
@@ -593,6 +640,24 @@
       selectedNilaiMatkulId = ''
       editingNilaiDetail = null
       nilaiFormData = {}
+    }
+
+    if (key !== 'mahasiswa') {
+      mahasiswaDepartemenFilter = ''
+      mahasiswaAngkatanFilter = ''
+    }
+
+    if (key !== 'dosen') {
+      dosenDepartemenFilter = ''
+    }
+
+    if (key !== 'mata_kuliah') {
+      mataKuliahDepartemenFilter = ''
+    }
+
+    if (key !== 'jadwal') {
+      jadwalDepartemenFilter = ''
+      jadwalPeriodeFilter = ''
     }
 
     if (nextResource) {
@@ -706,7 +771,9 @@
     const target = event.currentTarget as HTMLInputElement | HTMLSelectElement
     const value = field.type === 'checkbox' && target instanceof HTMLInputElement
       ? (target.checked ? 1 : 0)
-      : target.value
+      : target instanceof HTMLSelectElement
+        ? readSelectValue(target)
+        : target.value
     const nextData: FormData = {
       ...formData,
       [field.name]: value,
@@ -719,6 +786,21 @@
 
       if (value !== 'dosen') {
         nextData.id_dosen = ''
+      }
+    }
+
+    if (resource?.key === 'mahasiswa' && field.name === 'id_departemen') {
+      const matchingDosen = getCollection('dosen').filter((row) => sameId(row.id_departemen, value))
+      const wali = nextData.id_dosen_wali
+        ? byId('dosen', 'id_dosen', nextData.id_dosen_wali)
+        : null
+
+      if (matchingDosen.length === 1) {
+        nextData.id_dosen_wali = matchingDosen[0].id_dosen ?? ''
+      } else if (wali && sameId(wali.id_departemen, value)) {
+        nextData.id_dosen_wali = wali.id_dosen ?? ''
+      } else {
+        nextData.id_dosen_wali = ''
       }
     }
 
@@ -872,7 +954,7 @@
 
   function setSelectedJadwal(event: Event) {
     const target = event.currentTarget as HTMLSelectElement
-    selectedJadwalId = target.value
+    selectedJadwalId = readSelectValue(target)
   }
 
   async function createKrsForStudent(nrp: DataValue | undefined) {
@@ -1039,9 +1121,7 @@
 
     if (!selectedNilaiMatkulId || !options.some((row) => sameId(row.id_matkul, selectedNilaiMatkulId))) {
       const optionWithStudents = options.find((row) =>
-        getCollection('detail_krs').some((detail) => (
-          detail.status_krs === 'Disetujui' && sameId(detail.id_matkul, row.id_matkul)
-        ))
+        getCollection('detail_krs').some((detail) => sameId(detailMatkulId(detail), row.id_matkul))
       )
 
       selectedNilaiMatkulId = optionWithStudents?.id_matkul ?? options[0].id_matkul ?? ''
@@ -1061,7 +1141,7 @@
     }
 
     return getCollection('detail_krs')
-      .filter((detail) => detail.status_krs === 'Disetujui' && sameId(detail.id_matkul, selectedNilaiMatkulId))
+      .filter((detail) => sameId(detailMatkulId(detail), selectedNilaiMatkulId))
       .filter((detail) => {
         if (!term) {
           return true
@@ -1075,7 +1155,7 @@
 
   function setSelectedNilaiMatkul(event: Event) {
     const target = event.currentTarget as HTMLSelectElement
-    selectedNilaiMatkulId = target.value
+    selectedNilaiMatkulId = readSelectValue(target)
     editingNilaiDetail = null
     nilaiFormData = {}
     errorMessage = ''
@@ -1170,6 +1250,16 @@
     return String(left ?? '') === String(right ?? '')
   }
 
+  function readSelectValue(target: HTMLSelectElement): DataValue {
+    const selectedOption = target.selectedOptions[0] as (HTMLOptionElement & { __value?: DataValue }) | undefined
+
+    if (selectedOption && Object.prototype.hasOwnProperty.call(selectedOption, '__value')) {
+      return selectedOption.__value ?? ''
+    }
+
+    return target.value
+  }
+
   function isActiveFlag(value: unknown) {
     const normalized = String(value ?? '').toLowerCase()
     return value === 1 || value === true || normalized === '1' || normalized === 'true'
@@ -1262,6 +1352,156 @@
     return text
   }
 
+  function formatTableValue(resourceConfig: Resource, row: DataRow, field: Field) {
+    if (resourceConfig.key === 'mahasiswa') {
+      if (field.name === 'id_departemen') {
+        return getDepartemenName(row.id_departemen)
+      }
+
+      if (field.name === 'id_dosen_wali') {
+        return getDosenName(row.id_dosen_wali)
+      }
+    }
+
+    if (resourceConfig.key === 'dosen' && field.name === 'id_departemen') {
+      return getDepartemenName(row.id_departemen)
+    }
+
+    if (resourceConfig.key === 'mata_kuliah' && field.name === 'id_departemen') {
+      return getDepartemenName(row.id_departemen)
+    }
+
+    if (resourceConfig.key === 'jadwal') {
+      if (field.name === 'id_periode') {
+        return getPeriodeLabel(row.id_periode)
+      }
+
+      if (field.name === 'id_matkul') {
+        return getMatkulName(row.id_matkul)
+      }
+
+      if (field.name === 'id_kelas') {
+        return getKelasName(row.id_kelas)
+      }
+
+      if (field.name === 'id_dosen') {
+        return getDosenName(row.id_dosen)
+      }
+    }
+
+    return formatValue(row[field.name])
+  }
+
+  function getFilteredRows(
+    resourceConfig: Resource,
+    rowList: DataRow[],
+    termValue: string,
+    departemenFilter: DataValue,
+    angkatanFilter: DataValue,
+    dosenFilter: DataValue,
+    mataKuliahFilter: DataValue,
+    jadwalDepartemen: DataValue,
+    jadwalPeriode: DataValue,
+    _version = dataVersion
+  ) {
+    const term = termValue.trim().toLowerCase()
+
+    return rowList.filter((row) => {
+      if (resourceConfig.key === 'mahasiswa') {
+        if (departemenFilter && !sameId(row.id_departemen, departemenFilter)) {
+          return false
+        }
+
+        if (angkatanFilter && !sameId(row.angkatan, angkatanFilter)) {
+          return false
+        }
+      }
+
+      if (resourceConfig.key === 'dosen' && dosenFilter && !sameId(row.id_departemen, dosenFilter)) {
+        return false
+      }
+
+      if (resourceConfig.key === 'mata_kuliah' && mataKuliahFilter && !sameId(row.id_departemen, mataKuliahFilter)) {
+        return false
+      }
+
+      if (resourceConfig.key === 'jadwal') {
+        const matkul = byId('mata_kuliah', 'id_matkul', row.id_matkul)
+
+        if (jadwalDepartemen && !sameId(matkul?.id_departemen, jadwalDepartemen)) {
+          return false
+        }
+
+        if (jadwalPeriode && !sameId(row.id_periode, jadwalPeriode)) {
+          return false
+        }
+      }
+
+      if (!term) {
+        return true
+      }
+
+      const values = resourceConfig.key === 'mahasiswa'
+        ? [...Object.values(row), getDepartemenName(row.id_departemen), getDosenName(row.id_dosen_wali)]
+        : resourceConfig.key === 'dosen'
+          ? [...Object.values(row), getDepartemenName(row.id_departemen)]
+          : resourceConfig.key === 'mata_kuliah'
+            ? [...Object.values(row), getDepartemenName(row.id_departemen)]
+            : resourceConfig.key === 'jadwal'
+              ? [
+                  ...Object.values(row),
+                  getPeriodeLabel(row.id_periode),
+                  getMatkulName(row.id_matkul),
+                  getKelasName(row.id_kelas),
+                  getDosenName(row.id_dosen),
+                  getDepartemenName(byId('mata_kuliah', 'id_matkul', row.id_matkul)?.id_departemen),
+                ]
+            : Object.values(row)
+
+      return values.some((value) => String(value ?? '').toLowerCase().includes(term))
+    })
+  }
+
+  function mahasiswaAngkatanOptions(_version = dataVersion) {
+    return Array.from(
+      new Set(
+        getCollection('mahasiswa')
+          .map((row) => row.angkatan)
+          .filter((value) => value !== null && value !== undefined && String(value) !== '')
+      )
+    ).sort((left, right) => Number(left) - Number(right) || String(left).localeCompare(String(right)))
+  }
+
+  function setMahasiswaDepartemenFilter(event: Event) {
+    const target = event.currentTarget as HTMLSelectElement
+    mahasiswaDepartemenFilter = readSelectValue(target)
+  }
+
+  function setMahasiswaAngkatanFilter(event: Event) {
+    const target = event.currentTarget as HTMLSelectElement
+    mahasiswaAngkatanFilter = readSelectValue(target)
+  }
+
+  function setDosenDepartemenFilter(event: Event) {
+    const target = event.currentTarget as HTMLSelectElement
+    dosenDepartemenFilter = readSelectValue(target)
+  }
+
+  function setMataKuliahDepartemenFilter(event: Event) {
+    const target = event.currentTarget as HTMLSelectElement
+    mataKuliahDepartemenFilter = readSelectValue(target)
+  }
+
+  function setJadwalDepartemenFilter(event: Event) {
+    const target = event.currentTarget as HTMLSelectElement
+    jadwalDepartemenFilter = readSelectValue(target)
+  }
+
+  function setJadwalPeriodeFilter(event: Event) {
+    const target = event.currentTarget as HTMLSelectElement
+    jadwalPeriodeFilter = readSelectValue(target)
+  }
+
   function formatActivityTime(value: DataValue | undefined) {
     if (!value) {
       return '-'
@@ -1349,6 +1589,10 @@
   }
 
   function metricValue(collectionKey: string) {
+    if (isInitialDataLoading && getCollection(collectionKey).length === 0) {
+      return '...'
+    }
+
     return getCollection(collectionKey).length
   }
 
@@ -1386,6 +1630,30 @@
     )
 
     return getCollection('nilai').filter((row) => allowedDkrs.has(String(row.id_dkrs)))
+  }
+
+  function nilaiDetailRowsForDosen() {
+    const allowedJadwal = new Set(currentDosenSchedule().map((row) => String(row.id_jadwal)))
+    const term = searchTerm.trim().toLowerCase()
+
+    return getCollection('detail_krs')
+      .filter((detail) => allowedJadwal.has(String(detail.id_jadwal)))
+      .filter((detail) => {
+        if (!term) {
+          return true
+        }
+
+        return [
+          detail.nama_mahasiswa,
+          getMahasiswaName(detail.NRP),
+          detail.NRP,
+          detailMatkulName(detail),
+        ].some((value) => String(value ?? '').toLowerCase().includes(term))
+      })
+      .sort((left, right) =>
+        String(detailMatkulName(left)).localeCompare(String(detailMatkulName(right))) ||
+        String(getMahasiswaName(left.NRP)).localeCompare(String(getMahasiswaName(right.NRP)))
+      )
   }
 
   function currentStudent() {
@@ -1447,16 +1715,27 @@
 
   function availableJadwalRowsForKrs(krs: DataRow | null | undefined) {
     const periodeId = krs?.id_periode ?? activePeriode?.id_periode
+    const student = byId('mahasiswa', 'NRP', krs?.NRP)
+    const studentDepartemen = student?.id_departemen
     const usedJadwalIds = new Set(detailRowsForKrs(krs).map((row) => String(row.id_jadwal)))
 
+    if (!studentDepartemen) {
+      return []
+    }
+
     return getCollection('jadwal').filter((row) => (
-      sameId(row.id_periode, periodeId) && !usedJadwalIds.has(String(row.id_jadwal))
+      sameId(row.id_periode, periodeId) &&
+      !usedJadwalIds.has(String(row.id_jadwal)) &&
+      sameId(byId('mata_kuliah', 'id_matkul', row.id_matkul)?.id_departemen, studentDepartemen)
     ))
   }
 
   function formatJadwalOption(row: DataRow) {
     const sks = byId('mata_kuliah', 'id_matkul', row.id_matkul)?.sks ?? '-'
-    return `${getMatkulName(row.id_matkul)} - ${getKelasName(row.id_kelas)} - ${getDosenName(row.id_dosen)} - ${formatTimeRange(row)} - ${sks} SKS`
+    const kapasitas = byId('kelas', 'id_kelas', row.id_kelas)?.kapasitas_kelas ?? '-'
+    const terisi = getCollection('detail_krs').filter((detail) => sameId(detail.id_jadwal, row.id_jadwal)).length
+
+    return `${getMatkulName(row.id_matkul)} - ${getKelasName(row.id_kelas)} - ${getDosenName(row.id_dosen)} - ${formatTimeRange(row)} - ${sks} SKS - Kapasitas ${terisi}/${kapasitas}`
   }
 
   function currentStudentKrsRows() {
@@ -1467,6 +1746,19 @@
     }
 
     return getCollection('krs').filter((row) => sameId(row.NRP, student.NRP))
+  }
+
+  function periodeOrderValue(row: DataRow | null | undefined) {
+    const periode = byId('periode_aktif', 'id_periode', row?.id_periode)
+    const tahun = Number(periode?.tahun ?? row?.tahun ?? 0)
+    const semester = String(periode?.semester ?? row?.semester ?? '')
+    const semesterOrder = semester === 'Genap' ? 2 : 1
+
+    return tahun * 10 + semesterOrder
+  }
+
+  function studentKrsHistoryRows() {
+    return [...currentStudentKrsRows()].sort((left, right) => periodeOrderValue(left) - periodeOrderValue(right))
   }
 
   function currentStudentDetailRows() {
@@ -1484,6 +1776,110 @@
 
   function jadwalByDetail(row: DataRow) {
     return byId('jadwal', 'id_jadwal', row.id_jadwal)
+  }
+
+  function detailMatkulId(row: DataRow) {
+    return row.id_matkul ?? jadwalByDetail(row)?.id_matkul ?? null
+  }
+
+  function detailMatkulName(row: DataRow) {
+    return row.nama_matkul ?? getMatkulName(detailMatkulId(row))
+  }
+
+  function detailSks(row: DataRow) {
+    return Number(row.sks ?? byId('mata_kuliah', 'id_matkul', detailMatkulId(row))?.sks ?? 0)
+  }
+
+  function gradePoint(value: DataValue | undefined) {
+    const grade = String(value ?? '').toUpperCase()
+    const points: Record<string, number> = {
+      A: 4,
+      AB: 3.5,
+      B: 3,
+      BC: 2.5,
+      C: 2,
+      D: 1,
+      E: 0,
+    }
+
+    return Object.prototype.hasOwnProperty.call(points, grade) ? points[grade] : null
+  }
+
+  function detailWeightedScore(row: DataRow) {
+    const point = gradePoint(nilaiByDetail(row.id_dkrs)?.huruf_mutu)
+
+    if (point === null) {
+      return null
+    }
+
+    return detailSks(row) * point
+  }
+
+  function formatScore(value: number | null) {
+    if (value === null || !Number.isFinite(value)) {
+      return '-'
+    }
+
+    return Number.isInteger(value) ? String(value) : value.toFixed(1)
+  }
+
+  function formatGpa(value: DataValue | number | undefined) {
+    const numeric = Number(value ?? 0)
+    return Number.isFinite(numeric) ? numeric.toFixed(2) : '0.00'
+  }
+
+  function semesterLabel(row: DataRow | null | undefined) {
+    const periode = byId('periode_aktif', 'id_periode', row?.id_periode)
+    const semester = String(periode?.semester ?? row?.semester ?? '-')
+    const tahun = periode?.tahun ?? row?.tahun ?? '-'
+
+    return `${semester === 'Ganjil' ? 'Gasal' : semester} ${tahun}`
+  }
+
+  function semesterDetailRows(krs: DataRow | null | undefined) {
+    return detailRowsForKrs(krs)
+      .filter((row) => Boolean(jadwalByDetail(row)))
+      .sort((left, right) => String(detailMatkulId(left) ?? '').localeCompare(String(detailMatkulId(right) ?? '')))
+  }
+
+  function semesterTotalSks(krs: DataRow | null | undefined) {
+    const rows = semesterDetailRows(krs)
+    const total = rows.reduce((sum, row) => sum + detailSks(row), 0)
+    return total || Number(krs?.total_sks ?? 0)
+  }
+
+  function semesterIps(krs: DataRow | null | undefined) {
+    const rows = semesterDetailRows(krs)
+    const totalSks = rows.reduce((sum, row) => sum + detailSks(row), 0)
+    const totalScore = rows.reduce((sum, row) => sum + (detailWeightedScore(row) ?? 0), 0)
+    const calculated = totalSks > 0 ? totalScore / totalSks : 0
+
+    return calculated > 0 ? calculated : Number(krs?.ips ?? 0)
+  }
+
+  function transcriptDetailRows() {
+    return currentStudentDetailRows()
+      .filter((row) => Boolean(jadwalByDetail(row)))
+      .sort((left, right) => periodeOrderValue(byId('krs', 'id_krs', left.id_krs)) - periodeOrderValue(byId('krs', 'id_krs', right.id_krs))
+        || String(detailMatkulId(left) ?? '').localeCompare(String(detailMatkulId(right) ?? '')))
+  }
+
+  function transcriptTotalSks() {
+    const total = transcriptDetailRows().reduce((sum, row) => sum + detailSks(row), 0)
+    return total || totalStudentSks()
+  }
+
+  function transcriptIpk() {
+    const rows = transcriptDetailRows()
+    const totalSks = rows.reduce((sum, row) => sum + detailSks(row), 0)
+    const totalScore = rows.reduce((sum, row) => sum + (detailWeightedScore(row) ?? 0), 0)
+    const calculated = totalSks > 0 ? totalScore / totalSks : 0
+
+    return calculated > 0 ? calculated : Number(currentStudent()?.ipk ?? 0)
+  }
+
+  function printTranscript() {
+    window.print()
   }
 
   function totalStudentSks() {
@@ -1504,11 +1900,10 @@
     <section class="login-brand">
       <p class="eyebrow">SIAKAD</p>
       <h1>Universitas Cendekia</h1>
-      <p class="login-copy">Sistem informasi akademik untuk administrasi, dosen wali, dan mahasiswa.</p>
       <div class="login-stats" aria-label="Ringkasan sistem">
         <div><strong>{metricValue('mahasiswa')}</strong><span>Mahasiswa</span></div>
         <div><strong>{metricValue('dosen')}</strong><span>Dosen</span></div>
-        <div><strong>{metricValue('mata_kuliah')}</strong><span>Mata Kuliah</span></div>
+        <div><strong>{metricValue('departemen')}</strong><span>Departemen</span></div>
       </div>
     </section>
 
@@ -1907,7 +2302,14 @@
                         <td>{nilai?.nilai_akhir ?? '-'}</td>
                         <td>{nilai?.huruf_mutu ?? '-'}</td>
                         <td class="actions">
-                          <button type="button" on:click={() => startNilaiEdit(detail)}>Edit</button>
+                          <button
+                            type="button"
+                            disabled={detail.status_krs !== 'Disetujui'}
+                            title={detail.status_krs === 'Disetujui' ? 'Input nilai' : 'KRS belum disetujui'}
+                            on:click={() => startNilaiEdit(detail)}
+                          >
+                            {detail.status_krs === 'Disetujui' ? 'Edit' : 'Menunggu KRS'}
+                          </button>
                         </td>
                       </tr>
                     {/each}
@@ -1937,7 +2339,7 @@
                 </label>
                 <label>
                   <span>Mata Kuliah</span>
-                  <input value={editingNilaiDetail.nama_matkul ?? getMatkulName(editingNilaiDetail.id_matkul)} disabled />
+                  <input value={detailMatkulName(editingNilaiDetail)} disabled />
                 </label>
                 <label>
                   <span>Tugas</span>
@@ -1995,10 +2397,74 @@
                 <p class="eyebrow">Table</p>
                 <h2>{resource.label}</h2>
               </div>
-              <label class="search">
-                <span>Cari {resource.label}</span>
-                <input bind:value={searchTerm} type="search" placeholder="Cari data" />
-              </label>
+              <div class="table-tools">
+                {#if resource.key === 'mahasiswa'}
+                  <label class="table-filter">
+                    <span>Filter Departemen</span>
+                    <select value={mahasiswaDepartemenFilter ?? ''} on:change={setMahasiswaDepartemenFilter}>
+                      <option value="">Semua Departemen</option>
+                      {#each getCollection('departemen') as departemen}
+                        <option value={departemen.id_departemen}>{departemen.nama_departemen}</option>
+                      {/each}
+                    </select>
+                  </label>
+                  <label class="table-filter narrow">
+                    <span>Filter Angkatan</span>
+                    <select value={mahasiswaAngkatanFilter ?? ''} on:change={setMahasiswaAngkatanFilter}>
+                      <option value="">Semua Angkatan</option>
+                      {#each mahasiswaAngkatanOptions(dataVersion) as angkatan}
+                        <option value={angkatan}>{angkatan}</option>
+                      {/each}
+                    </select>
+                  </label>
+                {/if}
+                {#if resource.key === 'dosen'}
+                  <label class="table-filter">
+                    <span>Filter Departemen</span>
+                    <select value={dosenDepartemenFilter ?? ''} on:change={setDosenDepartemenFilter}>
+                      <option value="">Semua Departemen</option>
+                      {#each getCollection('departemen') as departemen}
+                        <option value={departemen.id_departemen}>{departemen.nama_departemen}</option>
+                      {/each}
+                    </select>
+                  </label>
+                {/if}
+                {#if resource.key === 'mata_kuliah'}
+                  <label class="table-filter">
+                    <span>Filter Departemen</span>
+                    <select value={mataKuliahDepartemenFilter ?? ''} on:change={setMataKuliahDepartemenFilter}>
+                      <option value="">Semua Departemen</option>
+                      {#each getCollection('departemen') as departemen}
+                        <option value={departemen.id_departemen}>{departemen.nama_departemen}</option>
+                      {/each}
+                    </select>
+                  </label>
+                {/if}
+                {#if resource.key === 'jadwal'}
+                  <label class="table-filter">
+                    <span>Filter Departemen</span>
+                    <select value={jadwalDepartemenFilter ?? ''} on:change={setJadwalDepartemenFilter}>
+                      <option value="">Semua Departemen</option>
+                      {#each getCollection('departemen') as departemen}
+                        <option value={departemen.id_departemen}>{departemen.nama_departemen}</option>
+                      {/each}
+                    </select>
+                  </label>
+                  <label class="table-filter narrow">
+                    <span>Filter Periode</span>
+                    <select value={jadwalPeriodeFilter ?? ''} on:change={setJadwalPeriodeFilter}>
+                      <option value="">Semua Periode</option>
+                      {#each getCollection('periode_aktif') as periode}
+                        <option value={periode.id_periode}>{getPeriodeLabel(periode.id_periode)}</option>
+                      {/each}
+                    </select>
+                  </label>
+                {/if}
+                <label class="search">
+                  <span>Cari {resource.label}</span>
+                  <input bind:value={searchTerm} type="search" placeholder="Cari data" />
+                </label>
+              </div>
             </div>
 
             <div class="table-shell">
@@ -2020,7 +2486,7 @@
                     {#each filteredRows as row}
                       <tr>
                         {#each resource.fields as field}
-                          <td>{formatValue(row[field.name])}</td>
+                          <td>{formatTableValue(resource, row, field)}</td>
                         {/each}
                         <td class="actions">
                           <button type="button" on:click={() => editRow(row)}>Edit</button>
@@ -2063,7 +2529,7 @@
                           <option value={option}>{option}</option>
                         {/each}
                       {:else if field.reference}
-                        {#each referenceOptions[getFieldReferenceKey(field)] ?? [] as option}
+                        {#each getFieldOptions(field, formData.id_departemen, dataVersion) as option}
                           <option value={option.value}>{option.label}</option>
                         {/each}
                       {/if}
@@ -2120,20 +2586,101 @@
           </div>
         </article>
       {:else if selectedKey === 'rekap_nilai'}
-        <article class="panel">
-          <h3>Rekap Nilai</h3>
-          <div class="table-shell">
-            <table>
-              <thead><tr><th>NRP</th><th>Nama</th><th>Mata Kuliah</th><th>Tugas</th><th>ETS</th><th>EAS</th><th>Akhir</th><th>Huruf</th></tr></thead>
-              <tbody>
-                {#each nilaiRowsForDosen() as row}
-                  {@const detail = byId('detail_krs', 'id_dkrs', row.id_dkrs)}
-                  <tr><td>{detail?.NRP ?? '-'}</td><td>{getMahasiswaName(detail?.NRP)}</td><td>{detail?.nama_matkul ?? '-'}</td><td>{row.nilai_tugas}</td><td>{row.nilai_ETS}</td><td>{row.nilai_EAS}</td><td>{row.nilai_akhir}</td><td>{row.huruf_mutu}</td></tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        </article>
+        <section class="crud-layout">
+          <section class="content-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Table</p>
+                <h2>Rekap Nilai</h2>
+              </div>
+              <label class="search">
+                <span>Cari Mahasiswa</span>
+                <input bind:value={searchTerm} type="search" placeholder="Cari Mahasiswa" />
+              </label>
+            </div>
+            <div class="table-shell">
+              <table>
+                <thead><tr><th>NRP</th><th>Nama</th><th>Mata Kuliah</th><th>Tugas</th><th>ETS</th><th>EAS</th><th>Akhir</th><th>Huruf</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {#each nilaiDetailRowsForDosen() as detail}
+                    {@const nilai = nilaiByDetail(detail.id_dkrs)}
+                    <tr>
+                      <td>{detail.NRP ?? '-'}</td>
+                      <td>{detail.nama_mahasiswa ?? getMahasiswaName(detail.NRP)}</td>
+                      <td>{detailMatkulName(detail)}</td>
+                      <td>{nilai?.nilai_tugas ?? '-'}</td>
+                      <td>{nilai?.nilai_ETS ?? '-'}</td>
+                      <td>{nilai?.nilai_EAS ?? '-'}</td>
+                      <td>{nilai?.nilai_akhir ?? '-'}</td>
+                      <td>{nilai?.huruf_mutu ?? '-'}</td>
+                      <td class="actions">
+                        <button
+                          type="button"
+                          disabled={detail.status_krs !== 'Disetujui'}
+                          title={detail.status_krs === 'Disetujui' ? 'Input nilai' : 'KRS belum disetujui'}
+                          on:click={() => startNilaiEdit(detail)}
+                        >
+                          {detail.status_krs === 'Disetujui' ? 'Edit' : 'Menunggu KRS'}
+                        </button>
+                      </td>
+                    </tr>
+                  {:else}
+                    <tr><td colspan="9" class="empty-cell">Belum ada mahasiswa pada jadwal mengajar ini.</td></tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="editor-card">
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Form</p>
+                <h2>{editingNilaiDetail ? 'Input Nilai' : 'Tambah Nilai'}</h2>
+              </div>
+            </div>
+
+            {#if editingNilaiDetail}
+              <form on:submit|preventDefault={saveNilaiForDetail}>
+                <label>
+                  <span>Nama</span>
+                  <input value={editingNilaiDetail.nama_mahasiswa ?? getMahasiswaName(editingNilaiDetail.NRP)} disabled />
+                </label>
+                <label>
+                  <span>NRP</span>
+                  <input value={editingNilaiDetail.NRP ?? '-'} disabled />
+                </label>
+                <label>
+                  <span>Mata Kuliah</span>
+                  <input value={detailMatkulName(editingNilaiDetail)} disabled />
+                </label>
+                <label>
+                  <span>Tugas</span>
+                  <input value={nilaiFormData.nilai_tugas ?? ''} type="number" min="0" max="100" step="1" on:input={(event) => setNilaiField('nilai_tugas', event)} />
+                </label>
+                <label>
+                  <span>ETS</span>
+                  <input value={nilaiFormData.nilai_ETS ?? ''} type="number" min="0" max="100" step="1" on:input={(event) => setNilaiField('nilai_ETS', event)} />
+                </label>
+                <label>
+                  <span>EAS</span>
+                  <input value={nilaiFormData.nilai_EAS ?? ''} type="number" min="0" max="100" step="1" on:input={(event) => setNilaiField('nilai_EAS', event)} />
+                </label>
+
+                <div class="form-actions">
+                  <button class="primary" type="submit" disabled={isSaving}>
+                    {isSaving ? 'Saving...' : 'Simpan'}
+                  </button>
+                  <button type="button" on:click={cancelNilaiEdit}>Cancel</button>
+                </div>
+              </form>
+            {:else}
+              <div class="krs-helper-form">
+                <p class="empty-note">Pilih mahasiswa dari tabel untuk menginput atau mengubah nilai.</p>
+              </div>
+            {/if}
+          </section>
+        </section>
       {:else if selectedKey === 'krs_dosen'}
         <article class="panel">
           <h3>KRS</h3>
@@ -2264,32 +2811,118 @@
             </button>
           {/if}
         </article>
-      {:else if selectedKey === 'transkrip' || selectedKey === 'riwayat'}
-        <article class="panel">
+      {:else if selectedKey === 'riwayat'}
+        <section class="academic-stack">
+          {#each studentKrsHistoryRows() as krs}
+            {@const rows = semesterDetailRows(krs)}
+            <article class="semester-card">
+              <div class="semester-card-head">
+                <span class="period-chip">{semesterLabel(krs)}</span>
+              </div>
+              <div class="academic-table-shell">
+                <table class="academic-table">
+                  <thead>
+                    <tr><th>Mata Kuliah</th><th>Kode</th><th>SKS</th><th>Nilai</th></tr>
+                  </thead>
+                  <tbody>
+                    {#if rows.length === 0}
+                      <tr><td colspan="4" class="empty-cell">Belum ada mata kuliah pada periode ini.</td></tr>
+                    {:else}
+                      {#each rows as detail}
+                        {@const nilai = nilaiByDetail(detail.id_dkrs)}
+                        <tr>
+                          <td>{detailMatkulName(detail)}</td>
+                          <td>{detailMatkulId(detail)}</td>
+                          <td>{detailSks(detail)}</td>
+                          <td>{nilai?.huruf_mutu ?? '-'}</td>
+                        </tr>
+                      {/each}
+                    {/if}
+                  </tbody>
+                </table>
+              </div>
+              <div class="academic-summary">
+                <span>Total SKS: {semesterTotalSks(krs)}</span>
+                <span>IPS: {formatGpa(semesterIps(krs))}</span>
+              </div>
+            </article>
+          {:else}
+            <article class="semester-card">
+              <p class="empty-note">Riwayat studi belum tersedia.</p>
+            </article>
+          {/each}
+        </section>
+      {:else if selectedKey === 'transkrip'}
+        <article class="panel transcript-card screen-transcript">
           <div class="panel-head">
-            <h3>{selectedKey === 'transkrip' ? 'Transkrip & IPK' : 'Riwayat Studi'}</h3>
-            <button type="button">Unduh Transkrip</button>
+            <h3>Transkrip & IPK</h3>
+            <button type="button" on:click={printTranscript}>Unduh Transkrip</button>
           </div>
-          <div class="table-shell">
-            <table>
-              <thead><tr><th>Kode</th><th>Mata Kuliah</th><th>SKS</th><th>Nilai</th><th>Periode</th></tr></thead>
+          <div class="academic-table-shell">
+            <table class="academic-table">
+              <thead><tr><th>Mata Kuliah</th><th>Kode</th><th>SKS</th><th>Nilai</th></tr></thead>
               <tbody>
-                {#each currentStudentDetailRows() as detail}
-                  {@const jadwal = jadwalByDetail(detail)}
+                {#each transcriptDetailRows() as detail}
                   {@const nilai = nilaiByDetail(detail.id_dkrs)}
-                  {#if jadwal}
-                    <tr><td>{jadwal.id_matkul}</td><td>{getMatkulName(jadwal.id_matkul)}</td><td>{byId('mata_kuliah', 'id_matkul', jadwal.id_matkul)?.sks ?? '-'}</td><td>{nilai?.huruf_mutu ?? '-'}</td><td>{detail.semester} {detail.tahun}</td></tr>
-                  {/if}
+                  <tr>
+                    <td>{detailMatkulName(detail)}</td>
+                    <td>{detailMatkulId(detail)}</td>
+                    <td>{detailSks(detail)}</td>
+                    <td>{nilai?.huruf_mutu ?? '-'}</td>
+                  </tr>
+                {:else}
+                  <tr><td colspan="4" class="empty-cell">Transkrip belum tersedia.</td></tr>
                 {/each}
               </tbody>
             </table>
           </div>
-          <div class="transcript-summary">
-            <span>Total SKS: {totalStudentSks()}</span>
-            <span>IPS: {currentIps()}</span>
-            <span>IPK: {currentStudent()?.ipk ?? '0.00'}</span>
+          <div class="academic-summary">
+            <span>Total SKS: {transcriptTotalSks()}</span>
+            <span>IPK: {formatGpa(transcriptIpk())}</span>
           </div>
         </article>
+
+        {#if true}
+          {@const student = currentStudent()}
+          <article class="print-transcript">
+            <header class="print-transcript-head">
+              <p class="eyebrow">SIAKAD</p>
+              <h2>Universitas Cendekia</h2>
+              <h3>Transkrip Akademik</h3>
+            </header>
+            <section class="print-student-info">
+              <p><span>Nama</span><strong>{student?.nama_mahasiswa ?? activeUserName()}</strong></p>
+              <p><span>NRP</span><strong>{student?.NRP ?? currentUser.NRP ?? '-'}</strong></p>
+              <p><span>Departemen</span><strong>{getDepartemenName(student?.id_departemen)}</strong></p>
+              <p><span>Angkatan</span><strong>{student?.angkatan ?? '-'}</strong></p>
+            </section>
+            <table class="print-table">
+              <thead>
+                <tr><th>Kode</th><th>Mata Kuliah</th><th>SKS</th><th>N. Huruf</th><th>S*N</th><th>Periode</th></tr>
+              </thead>
+              <tbody>
+                {#each transcriptDetailRows() as detail}
+                  {@const nilai = nilaiByDetail(detail.id_dkrs)}
+                  {@const krs = byId('krs', 'id_krs', detail.id_krs)}
+                  <tr>
+                    <td>{detailMatkulId(detail)}</td>
+                    <td>{detailMatkulName(detail)}</td>
+                    <td>{detailSks(detail)}</td>
+                    <td>{nilai?.huruf_mutu ?? '-'}</td>
+                    <td>{formatScore(detailWeightedScore(detail))}</td>
+                    <td>{semesterLabel(krs)}</td>
+                  </tr>
+                {:else}
+                  <tr><td colspan="6">Transkrip belum tersedia.</td></tr>
+                {/each}
+              </tbody>
+            </table>
+            <footer class="print-summary">
+              <p><span>Total SKS</span><strong>{transcriptTotalSks()}</strong></p>
+              <p><span>IPK</span><strong>{formatGpa(transcriptIpk())}</strong></p>
+            </footer>
+          </article>
+        {/if}
       {/if}
       </section>
     </div>

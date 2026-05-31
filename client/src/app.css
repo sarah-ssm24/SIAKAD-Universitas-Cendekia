@@ -605,6 +605,37 @@ label {
   white-space: nowrap;
 }
 
+.table-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.table-filter {
+  width: min(180px, 100%);
+}
+
+.table-filter.narrow {
+  width: min(150px, 100%);
+}
+
+.table-filter span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.table-filter select {
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+
 .nilai-toolbar {
   display: flex;
   align-items: center;
@@ -1009,6 +1040,76 @@ label {
   margin-top: 12px;
 }
 
+.academic-stack {
+  display: grid;
+  gap: 28px;
+  max-width: 520px;
+}
+
+.semester-card,
+.transcript-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 10px;
+}
+
+.semester-card-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.academic-table-shell {
+  overflow-x: auto;
+}
+
+.academic-table {
+  min-width: 0;
+}
+
+.academic-table th,
+.academic-table td {
+  padding: 10px 14px;
+  text-align: center;
+}
+
+.academic-table th:first-child,
+.academic-table td:first-child {
+  text-align: left;
+}
+
+.academic-summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 28px;
+  border-radius: 10px;
+  background: var(--muted-surface);
+  margin-top: 10px;
+  padding: 10px 14px;
+  color: #222;
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.transcript-card {
+  max-width: 460px;
+}
+
+.transcript-card .panel-head {
+  margin-bottom: 12px;
+}
+
+.transcript-card .academic-summary {
+  justify-content: space-around;
+}
+
+.print-transcript {
+  display: none;
+}
+
 .panel-footer,
 .transcript-summary {
   display: flex;
@@ -1040,6 +1141,104 @@ label {
 .transcript-summary span {
   color: #222;
   font-weight: 760;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .app-header,
+  .side-card,
+  .profile-hero,
+  .notice,
+  .screen-transcript {
+    display: none !important;
+  }
+
+  .app-page,
+  .app-layout,
+  .page-shell {
+    display: block;
+    width: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    background: #fff;
+  }
+
+  .print-transcript {
+    display: block;
+    color: #111;
+    font-family: Arial, sans-serif;
+  }
+
+  .print-transcript-head {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 18px;
+    text-align: center;
+  }
+
+  .print-transcript-head h2 {
+    font-size: 20px;
+  }
+
+  .print-transcript-head h3 {
+    font-size: 18px;
+    text-transform: uppercase;
+  }
+
+  .print-student-info {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 28px;
+    border: 1px solid #222;
+    margin-bottom: 16px;
+    padding: 10px 12px;
+  }
+
+  .print-student-info p,
+  .print-summary p {
+    display: grid;
+    grid-template-columns: 90px minmax(0, 1fr);
+    gap: 8px;
+    margin: 0;
+    font-size: 12px;
+  }
+
+  .print-table {
+    width: 100%;
+    min-width: 0;
+    border-collapse: collapse;
+    border-spacing: 0;
+  }
+
+  .print-table th,
+  .print-table td {
+    border: 1px solid #333;
+    padding: 7px 8px;
+    color: #111;
+    font-size: 11px;
+    white-space: normal;
+  }
+
+  .print-table th {
+    background: #dedede !important;
+    font-weight: 700;
+  }
+
+  .print-summary {
+    display: grid;
+    justify-content: end;
+    gap: 6px;
+    margin-top: 14px;
+  }
 }
 
 @media (max-width: 1120px) {
