@@ -59,12 +59,12 @@ http://localhost:5173
 
 Kelompok 09
 
-| Nama | Role |
-|---|---|
-| Vinsen Dwi Putra | Fullstack |
-| Sarah Shafira Maulida | Database |
-| Anisa Hasna Mufida | UI/UX |
-| Yoga Andreas Hutajulu | UI/UX |
+| Nama | NRP | Role |
+|---|---|---|
+| Vinsen Dwi Putra | 5024241094 | Fullstack |
+| Sarah Shafira Maulida | 5024241035 | Database |
+| Anisa Hasna Mufida | 5024241071 | UI/UX |
+| Yoga Andreas Hutajulu | 5024241021 | UI/UX |
 
 ## Dokumentasi
 
