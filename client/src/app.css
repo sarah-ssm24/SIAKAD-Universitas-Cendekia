@@ -475,8 +475,9 @@ label {
 
 .admin-top-row {
   display: grid;
-  grid-template-columns: minmax(0, 450px) minmax(320px, 1fr);
-  gap: 58px;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  max-width: 580px;
+  gap: 16px;
   align-items: stretch;
 }
 
@@ -488,6 +489,13 @@ label {
 
 .admin-metrics {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.admin-info-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(360px, 1.35fr) minmax(260px, 0.9fr);
+  gap: 30px;
+  align-items: stretch;
 }
 
 .metric-card,
@@ -525,8 +533,8 @@ label {
 .period-card {
   display: grid;
   align-content: center;
-  gap: 14px;
-  min-height: 98px;
+  gap: 10px;
+  min-height: 150px;
   padding: 18px 20px;
 }
 
@@ -536,6 +544,48 @@ label {
 
 .period-card p {
   font-size: 14px;
+}
+
+.panel-kicker {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 820;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.quick-panel,
+.info-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 150px;
+}
+
+.info-list {
+  display: grid;
+  gap: 8px;
+}
+
+.info-list p {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 9px 12px;
+}
+
+.info-list span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.info-list strong {
+  color: var(--heading);
+  font-size: 17px;
 }
 
 .dashboard-grid {
@@ -935,6 +985,57 @@ label {
   line-height: 1.5;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(22, 24, 23, 0.28);
+  padding: 24px;
+}
+
+.logout-dialog {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: min(360px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 60px rgba(43, 38, 29, 0.18);
+  padding: 24px;
+  text-align: center;
+}
+
+.dialog-avatar {
+  width: 42px;
+  height: 42px;
+}
+
+.logout-dialog h2 {
+  font-size: 22px;
+}
+
+.logout-dialog p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.dialog-actions {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.dialog-actions button {
+  flex: 1;
+  border-radius: 999px;
+  font-weight: 760;
+}
+
 .actions {
   display: flex;
   align-items: center;
@@ -1246,6 +1347,7 @@ label {
   .crud-layout,
   .admin-krs-layout,
   .admin-top-row,
+  .admin-info-row,
   .dashboard-grid {
     grid-template-columns: 1fr;
   }
@@ -1281,6 +1383,8 @@ label {
   }
 
   .side-card nav,
+  .admin-top-row,
+  .admin-info-row,
   .admin-metrics,
   .metric-grid,
   .available-course-picker,

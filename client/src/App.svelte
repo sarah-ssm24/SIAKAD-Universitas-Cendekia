@@ -348,6 +348,7 @@
   let selectedNilaiMatkulId: DataValue = ''
   let editingNilaiDetail: DataRow | null = null
   let nilaiFormData: FormData = {}
+  let isLogoutDialogOpen = false
 
   const getResource = (key: string) => resources.find((item) => item.key === key) ?? null
   const getCollection = (key: string) => allData[key] ?? []
@@ -458,6 +459,18 @@
     }
   }
 
+  function requestLogout() {
+    isLogoutDialogOpen = true
+  }
+
+  function cancelLogout() {
+    isLogoutDialogOpen = false
+  }
+
+  function confirmLogout() {
+    logout()
+  }
+
   function logout() {
     currentUser = null
     selectedKey = 'dashboard'
@@ -466,6 +479,7 @@
     editingRow = null
     errorMessage = ''
     successMessage = ''
+    isLogoutDialogOpen = false
   }
 
   function getField(resourceConfig: Resource, fieldName: string): Field {
@@ -1600,6 +1614,22 @@
     return getCollection('krs').filter((row) => row.status_krs === 'Diajukan')
   }
 
+  function activeScheduleCount() {
+    if (!activePeriode) {
+      return 0
+    }
+
+    return getCollection('jadwal').filter((row) => sameId(row.id_periode, activePeriode.id_periode)).length
+  }
+
+  function dashboardInfoItems() {
+    return [
+      { label: 'KRS Pending', value: isInitialDataLoading ? '...' : pendingKrsRows().length },
+      { label: 'Jadwal Periode Ini', value: isInitialDataLoading ? '...' : activeScheduleCount() },
+      { label: 'Nilai Tercatat', value: isInitialDataLoading ? '...' : getCollection('nilai').length },
+    ]
+  }
+
   function currentDosenSchedule() {
     return getCollection('jadwal').filter((row) => (
       currentUser?.role !== 'dosen' || !currentUser.id_dosen || sameId(row.id_dosen, currentUser.id_dosen)
@@ -1948,7 +1978,7 @@
         <button class="manual-refresh" type="button" on:click={() => refreshCurrentView()} disabled={isLoading || isSaving}>
           Refresh
         </button>
-        <button class="user-pill" type="button" on:click={logout} title="Logout">
+        <button class="user-pill" type="button" on:click={requestLogout} title="Menu akun">
           <span class="mini-avatar" aria-hidden="true"></span>
           <span>{activeUserName()}</span>
           <span aria-hidden="true">v</span>
@@ -2017,14 +2047,40 @@
 
       {#if selectedKey === 'dashboard' && currentUser.role === 'admin'}
         <section class="admin-top-row">
-          <div class="metric-grid admin-metrics">
-            <article class="metric-card"><span>Total Mahasiswa</span><strong>{metricValue('mahasiswa')}</strong></article>
-            <article class="metric-card"><span>Total Dosen</span><strong>{metricValue('dosen')}</strong></article>
-            <article class="metric-card"><span>Mata Kuliah Aktif</span><strong>{metricValue('mata_kuliah')}</strong></article>
-          </div>
+          <article class="metric-card"><span>Total Mahasiswa</span><strong>{metricValue('mahasiswa')}</strong></article>
+          <article class="metric-card"><span>Total Dosen</span><strong>{metricValue('dosen')}</strong></article>
+          <article class="metric-card"><span>Jumlah Departemen</span><strong>{metricValue('departemen')}</strong></article>
+        </section>
+
+        <section class="admin-info-row">
           <article class="period-card">
+            <span class="panel-kicker">Periode</span>
             <h3>Masa Periode Aktif</h3>
             <p>{activePeriode ? `Semester ${activePeriode.semester} - Tahun Ajaran ${activePeriode.tahun}` : 'Periode belum aktif'}</p>
+          </article>
+
+          <article class="panel quick-panel">
+            <span class="panel-kicker">Navigasi</span>
+            <h3>Akses Cepat</h3>
+            <div class="quick-actions">
+              <button type="button" on:click={() => selectView('mahasiswa')}>Tambah Mahasiswa</button>
+              <button type="button" on:click={() => selectView('dosen')}>Tambah Dosen</button>
+              <button type="button" on:click={() => selectView('jadwal')}>Atur Jadwal Kuliah</button>
+              <button type="button" on:click={() => selectView('departemen')}>Tambah Departemen</button>
+            </div>
+          </article>
+
+          <article class="panel info-panel">
+            <span class="panel-kicker">Info</span>
+            <h3>Ringkasan Akademik</h3>
+            <div class="info-list">
+              {#each dashboardInfoItems() as item}
+                <p>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </p>
+              {/each}
+            </div>
           </article>
         </section>
 
@@ -2045,19 +2101,11 @@
                       <td>{row.total_sks ?? 0}</td>
                       <td><span class="status pending">{row.status_krs}</span></td>
                     </tr>
+                  {:else}
+                    <tr><td colspan="4" class="empty-cell">Tidak ada KRS pending.</td></tr>
                   {/each}
                 </tbody>
               </table>
-            </div>
-          </article>
-
-          <article class="panel">
-            <h3>Akses Cepat</h3>
-            <div class="quick-actions">
-              <button type="button" on:click={() => selectView('mahasiswa')}>Tambah Mahasiswa</button>
-              <button type="button" on:click={() => selectView('dosen')}>Tambah Dosen</button>
-              <button type="button" on:click={() => selectView('jadwal')}>Atur Jadwal Kuliah</button>
-              <button type="button" on:click={() => selectView('departemen')}>Tambah Departemen</button>
             </div>
           </article>
 
@@ -2926,5 +2974,27 @@
       {/if}
       </section>
     </div>
+
+    {#if isLogoutDialogOpen}
+      <div class="modal-backdrop" role="presentation" on:click={cancelLogout}>
+        <div
+          class="logout-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="logout-title"
+          tabindex="-1"
+          on:click|stopPropagation
+          on:keydown={(event) => event.key === 'Escape' && cancelLogout()}
+        >
+          <span class="mini-avatar dialog-avatar" aria-hidden="true"></span>
+          <h2 id="logout-title">Yakin mau logout?</h2>
+          <p>Sesi {activeUserName()} akan ditutup dan kamu akan kembali ke halaman login.</p>
+          <div class="dialog-actions">
+            <button type="button" on:click={cancelLogout}>Batal</button>
+            <button class="danger" type="button" on:click={confirmLogout}>Logout</button>
+          </div>
+        </div>
+      </div>
+    {/if}
   </main>
 {/if}
